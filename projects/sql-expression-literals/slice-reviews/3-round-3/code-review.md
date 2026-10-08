@@ -129,3 +129,35 @@ The last guard has no test. It is reached only when an index has an `options` fu
 | FAIL | 1 | AC11 |
 | NOT VERIFIED | 0 | |
 | WEAK | 0 | |
+
+## Fixes check, 2026-10-08
+
+Checked: code `cab6bcce23`, docs `79e9498810`, and the uncommitted slice 3 "Script" and "Expected" in `manual-qa.md`. Logs in `wip/3-round-3-review/fixes-*.log`, probe output in `fixes-probe.out`. The scratch probe test was deleted.
+
+Tests on the tip: `sql-expression.test.ts` 63 pass, `contract-ts` 584 pass, `@internal/postgres` `test/contract-builder` 124 pass, `cli.emit-parity-fixtures.test.ts` 64 pass (both projects).
+
+| Finding | Verdict | Evidence |
+| --- | --- | --- |
+| C01 marked values trusted | **Partly fixed** | Through lowering and `.default()` a marked foreign value is now rebuilt with this copy's constructor. Indented text is stored as `a = 1\n  AND b` in index `where`, index `expression`, check and default. A NUL or text over 65536 bytes throws `CONTRACT.SQL_EXPRESSION_INVALID`. A number as `text` is `CONTRACT.ARGUMENT_INVALID` (`Index "i" where must be a sql\`...\` value.`). In `.default()` it becomes the literal `{ text: 42 }`, as any non-`sql` object does. New tests cover the indented text, the NUL and the number. The `sql` tag still reads interpolated values raw: see C05. |
+| C02 manual QA (script only) | **Fixed** | The revised "Expected" names the object (`Index "u_a" where`, `Index "u_e" expression`, `Check "u_c" expression`, `Policy "u_read" using`). It adds the unnamed two-field full-text case (`Full-text index on fields "title", "email" where`) and marked objects with indented text (stored `email IS NULL`) and with a number (`ARGUMENT_INVALID`). It runs typecheck through the example's `typecheck` script. Each expected line matches what my probes got from the code. I did not check the recorded run, as asked. |
+| C03 single-column `fullTextIndex` docs | **Fixed** | Design section 15.3 says `Full-text index on fields "<field>", "<field>" where`, listing every weight group's fields. The error reference says the same. The extension fragment says `fullTextIndex` "stores its fields and language as data, renders no SQL, and is not affected". The new word "fields" is in the code, the tests and the error reference. |
+| C04 parity fixture | **Fixed, with one gap** | The fixture adds an interpolated value whose first line ends in `-- live rows only` inside an indented `where`, a tab-indented check, a two-group full-text index with a multi-line `where`, and an escaped backtick in TypeScript. The regenerated `expected.contract.json` changes only those entries and the storage hash. The gap: the PSL side writes the backtick check as `sql"\"email\" <> 'x`y'"`, the double-quoted form, so the PSL `` \` `` escape in a backtick literal is still not in the fixture. My earlier scratch case showed that it gives the same text. |
+
+### C05. The `sql` tag still interpolates a foreign value's text without canonicalizing it
+
+- Location: `packages/2-sql/1-core/contract/src/sql-expression.ts`, lines 150–166 (`sql`).
+- Issue: The tag checks each value with `isSqlExpression` and inserts `value.text` as it is. A value from another copy with text that is not canonical gets prefixed with the template line's indentation before canonicalization. So the stored text differs from what the same value made here gives. Probe, with `foreign = { [Symbol.for('@prisma/sql-expression')]: true, text: '\n    a = 1\n      AND b\n  ' }` and `local = new SqlExpression(` that same text `)`:
+
+  ```text
+  sql`\n      x AND (${foreign})\n    `.text => "x AND (\n    a = 1\n      AND b\n  )"
+  sql`\n      x AND (${local})\n    `.text   => "x AND (a = 1\n  AND b)"
+  ```
+
+  C01's goal (a foreign value's text is canonicalized here) holds for lowering and `.default()`, but not for interpolation. Interpolation is the common way TypeScript contracts reuse predicates.
+- Suggestion: In `sql`, read each value with `readSqlExpression` and refuse `undefined` with `CONTRACT.SQL_EXPRESSION_INTERPOLATION`. Add a unit test with the probe above.
+
+### C06. The error reference does not list the new raise site for a foreign value's text
+
+- Location: `docs/reference/error-reference.md`, `CONTRACT.SQL_EXPRESSION_INVALID` and `CONTRACT.ARGUMENT_INVALID`.
+- Issue: `CONTRACT.SQL_EXPRESSION_INVALID` is now also raised when a raw-SQL field or `.default()` gets a `sql` value from another installed copy whose text has a NUL character or is too large. The entry names only the constructor, the tag and rendered index text. Unlike the rendered case, this message does not name the field: index `where` with such a value gives only `Tagged literals must not contain NUL characters.`. `CONTRACT.ARGUMENT_INVALID` also does not say that a marked object whose `text` is not a string is refused.
+- Suggestion: Add one sentence to each entry. Optionally, prefix the message with the `what` string, as `renderedSqlText` does, by catching the refusal in `requireSqlExpression`.

@@ -74,3 +74,24 @@ Suggestion: change `post_body_search` to two weight groups in both files, for ex
 
 - Whether the error reference's long `CONTRACT.ARGUMENT_INVALID` and `CONTRACT.DEFAULT_INVALID` entries are readable is a learnability question, not a system-design one.
 - The `fullTextIndex({ where })` shorthand in both fragments' front matter does not match the call signature `fullTextIndex(fields, { where })`. The body tables show the real call, so I leave it to the code reviewer.
+
+## Fixes check, 2026-10-08
+
+Commits `79e9498810` (docs) and `cab6bcce23` (code). I read both diffs and the files at HEAD. I did not run tests.
+
+| Finding | Result | Evidence |
+| --- | --- | --- |
+| A01 | Fixed | Both fragments now say "`fullTextIndex` stores its fields and language as data, renders no SQL, and is not affected". The error reference example is `Index "post_title_lower" expression: `. |
+| A02 | Fixed | `fullTextIndexOwner` writes `Full-text index on fields "title", "subtitle", "text"` (full-text-index.ts line 111). Both tests and the error reference use the new form. Design 15.3 explains why "on fields" differs from `Index on "<Model>"`. |
+| A03 | Partly | Design 15.3 describes the every-field form. Status line 10 still says "2b made full-text indexes span several fields"; it was TML-3431 (#30562). |
+| A04 | Fixed | ADR 268 now names `.defaultSql()` (removed at 8.0.0 by TML-3286) and `.default({ kind: 'function', expression })`, and says both store the string without canonicalization. |
+| A05 | Fixed | ADR 268 now contrasts the tag with `db.raw.sql` (ADR 247): contract SQL becomes DDL, which has no parameters. |
+| A06 | Fixed | The parity fixture's `post_body_search` is `[[title, email], body]` with a multi-line `where` in both files. The fix also adds an interpolated value with a line comment, an escaped backtick and tab indentation. |
+
+### A07. The extension fragment does not describe the new rule for `sql` values from another copy of the package
+
+Location: upgrade-instructions/pending/sql-expression-literals-ts/extension/instructions.md lines 110 and 116; packages/2-sql/1-core/contract/src/sql-expression.ts lines 129-147.
+
+Issue: `cab6bcce23` changes what counts as a `sql` value. `isSqlExpression` now returns true for any object that carries the marker and has a string `text`, including one made by another installed copy of the package. A new export, `readSqlExpression`, turns such a value into this copy's `SqlExpression` and canonicalizes its text. `requireSqlExpression` and `.default()` use it. The fragment for extension authors lists `SqlExpression`, `isSqlExpression` and `requireSqlExpression` as the module's exports. It does not mention `readSqlExpression`. It also does not say that `isSqlExpression` does not prove a value is this copy's instance. An extension that checks with `isSqlExpression` and then reads `.text` gets text that may not be canonical. Inside the repo, only the `sql` tag does this, and it canonicalizes the joined text afterwards, so it is safe.
+
+Suggestion: in the `sql-tag-lives-in-sql-contract` section, add `readSqlExpression` to the list of exports. Say in one sentence that code which reads a value it did not make should use `readSqlExpression` or `requireSqlExpression`, not `isSqlExpression` followed by `.text`, because only those two canonicalize a value made by another copy. Low priority.

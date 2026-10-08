@@ -86,8 +86,13 @@ export class SqlExpression {
 }
 
 export function isSqlExpression(value: unknown): value is SqlExpression;
-// `typeof value === 'object' && value !== null && Reflect.get(value, SQL_EXPRESSION_MARKER) === true`.
+// `typeof value === 'object' && value !== null && Reflect.get(value, SQL_EXPRESSION_MARKER) === true` and its `text` is a string.
 // The `Symbol.for` marker makes the check work when two installed copies of this package meet at run time.
+
+/** This copy's `SqlExpression` for `value`, or undefined. A marked value from another copy is rebuilt with `new SqlExpression(value.text)`, so its text is canonicalized too. */
+export function readSqlExpression(value: unknown): SqlExpression | undefined;
+// Returns `value` when it is an instance of this copy's class; `new SqlExpression(value.text)` when `isSqlExpression(value)`; otherwise undefined.
+// `.default()`, lowering and `requireSqlExpression` read values through it. (Added in slice 3 review round 3, C01.)
 
 /** Raw SQL written as a template literal: `` sql`"userId" = auth.uid()` ``. Other `sql` values may be interpolated; each later line of one takes the indentation of the template line it sits on. */
 export function sql(strings: TemplateStringsArray, ...values: readonly SqlExpression[]): SqlExpression;
@@ -106,7 +111,7 @@ export function requireSqlExpression(value: unknown, what: string): SqlExpressio
 
 It performs no other check. An empty text is allowed.
 
-`requireSqlExpression(value, what)` returns `value` when `isSqlExpression(value)`. Otherwise it throws `contractError('CONTRACT.ARGUMENT_INVALID', \`${what} must be a sql\\\`...\\\` value.\`, { meta: { what } })`, for example ``Index "post_user_active" where must be a sql`...` value.`` Section 15 lists the `what` strings.
+`requireSqlExpression(value, what)` returns `readSqlExpression(value)` when that is defined. Otherwise it throws `contractError('CONTRACT.ARGUMENT_INVALID', \`${what} must be a sql\\\`...\\\` value.\`, { meta: { what } })`, for example ``Index "post_user_active" where must be a sql`...` value.`` Section 15 lists the `what` strings.
 
 In slice 3, add `'SQL_EXPRESSION_INTERPOLATION'` and `'SQL_EXPRESSION_INVALID'` to `ContractSubcode` in `packages/2-sql/1-core/contract/src/contract-errors.ts`.
 
