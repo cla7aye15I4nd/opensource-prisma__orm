@@ -2,13 +2,14 @@
 
 Read this first when you resume the project. It records where the work stands and the context that is not in the spec, design or plan. Update it at the end of every slice.
 
-## State on 2026-10-07
+## State on 2026-10-08
 
-- Merged: slice 2a (#30534), slice 1 (#30546), slice 4 (#30554) and slice 2t (#30539, squash `b35bcd7d10`, shipped in 8.0.0-rc.16).
-- Slice 2b (TML-3288) is pull request https://github.com/prisma/orm/pull/30550 on branch `tml-3288-sql-expression-places`, base `main`. Review round 3 covered the merges of 2t and `main` and the branch's commits since round 2; its findings are fixed (see "Slice 2b review, round 3" below). Next: hand it to Will.
-- Slice 3 (TML-3289) is https://github.com/prisma/orm/pull/30558, based on the 2b branch and in conflict with it. It waits for 2b. Its branch still names the ADR `ADR 260 - Raw SQL is a value of the data type sql-expression.md`; the decision is ADR 268 now.
-- Slice 5 (stretch, TML-3297) is not started. Ask Will before starting it.
-- The decision's ADR is ADR 268, because #30641 claims 267.
+lagertha-65 took over from hammurabi-31 on 2026-10-08.
+
+- Merged: slice 2a (#30534), slice 1 (#30546), slice 4 (#30554), slice 2t (#30539, shipped in 8.0.0-rc.16) and slice 2b (#30550, squash `7ae50f13f9`, 2026-10-08). TML-3288 and TML-3367 are Done in Linear.
+- Slice 3 (TML-3289) is https://github.com/prisma/orm/pull/30558, base `main`, branch `tml-3289-sql-expression-ts` (local name `l65-3`). 2b's final commit `a044872a36` and then `main` are merged in (`b3f0ca7a04`, `ba45958509`); every reference to its ADR says ADR 268 (`fc10468cd3`); `bd80bf468a` fixes what `main` added since. Brief: `dispatches/3-merge-2b-and-main-brief.md`; logs in `wip/3-merge/`. All checks pass except the three tarball tests below. One decision in the merge: an unnamed full-text index's `where` refusal names every field of its weight groups, `Full-text index on "title", "subtitle" where` (2b made full-text indexes span several fields). Next: review round 3 of slice 3 (`/drive-code-review`), fixes, manual QA, then Will.
+- Slice 5 (TML-3297): Will confirmed on 2026-10-08 that it is built, after slice 3 is with him. Not before.
+- The decision's ADR is ADR 268, because #30641 claims 267. Mentions of "ADR 260" in the slice 3 history below mean this ADR under its old number.
 - The three publish-shell tarball tests (`all-shells-tarball`, `module-identity`, `cross-shell-tarball`) fail on this machine because `pnpm install` in the scratch project refuses `@vercel/detect-agent` as a "high-risk trust downgrade". That is the registry, not the branch. Check them in CI.
 
 ## Known limits
@@ -348,11 +349,11 @@ Built in the linked worktree `wip/wt-1`, stacked on slice 1. Briefs: `dispatches
 | --- | --- | --- | --- |
 | 1 | 2a: `sql` is the data type `sql/expression` | TML-3296 | Merged 2026-09-30 (#30534) |
 | 2 | 2t: an argument declares the data type it receives | TML-3367 | Merged 2026-10-07 (#30539), shipped in rc.16 |
-| 3 | 2b: the six places take `sql` literals | TML-3288 | #30550 open against `main`; three review rounds done, all findings fixed |
-| 4 | 3: the TypeScript builder takes `sql` values | TML-3289 | #30558 open against the 2b branch; waits for 2b |
+| 3 | 2b: the six places take `sql` literals | TML-3288 | Merged 2026-10-08 (#30550) |
+| 4 | 3: the TypeScript builder takes `sql` values | TML-3289 | #30558 against `main`, up to date; review round 3 next |
 | On the side | 1: line comments in raw SQL | TML-3287 | Merged (#30546) |
 | Last | 4: migration files write template literals | TML-3290 | Merged (#30554) |
-| Stretch | 5: migration files write `sql` values | TML-3297 | Not started; ask Will |
+| Stretch | 5: migration files write `sql` values | TML-3297 | Confirmed by Will 2026-10-08; starts after slice 3 is with him |
 
 TML-3282 was the decision ticket and is done.
 
