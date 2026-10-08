@@ -90,7 +90,7 @@ A `sql` value stores its canonical text, as a PSL `sql` literal does: indentatio
 
 ## `infer-notes-defaults-that-do-not-read-back`
 
-A column default whose text a `sql` literal cannot write back unchanged, for example a string constant holding a carriage return or a whitespace-only line, is treated differently by the two commands that write PSL, for the reason ADR 260 gives ("Column defaults that do not read back"):
+A column default whose text a `sql` literal cannot write back unchanged, for example a string constant holding a carriage return or a whitespace-only line, is treated differently by the two commands that write PSL, for the reason ADR 268 gives ("Column defaults that do not read back"):
 
 - `contract infer` still writes the default as a `sql` literal and adds the comment `// prisma: default of "<column>" holds text a sql literal cannot write back unchanged; check its string constants before applying a migration` to the model. The literal reads back as a different constant, so a database created from the inferred schema gets that constant. Check the constant, and fix it in the schema or in the database before you apply a migration planned from it.
 - `contract print` refuses the default with `CONTRACT.PRINT_UNSUPPORTED` (``default of column "public"."post"."slug" holds SQL that a sql literal cannot write back unchanged``). Write the default in its canonical form in the contract's source. A contract holds such a default only when it was built before this release, or through `.default({ kind: 'function', expression })` or `.defaultSql('...')`.
