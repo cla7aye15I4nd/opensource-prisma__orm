@@ -50,6 +50,13 @@
                   "kind": "scalar"
                 }
               },
+              "title": {
+                "nullable": false,
+                "type": {
+                  "codecId": "pg/text@1",
+                  "kind": "scalar"
+                }
+              },
               "userId": {
                 "nullable": false,
                 "type": {
@@ -75,6 +82,9 @@
                 },
                 "slug": {
                   "column": "slug"
+                },
+                "title": {
+                  "column": "title"
                 },
                 "userId": {
                   "column": "userId"
@@ -132,6 +142,16 @@
                   "expression": "\"email\" !~ '\\s'",
                   "name": "post_email_no_space_36d6c4b8",
                   "prefix": "post_email_no_space"
+                },
+                {
+                  "expression": "\"email\" <> 'x`y'",
+                  "name": "post_email_not_backtick_278e2bf0",
+                  "prefix": "post_email_not_backtick"
+                },
+                {
+                  "expression": "\"id\" > 0\n\tAND \"id\" < 1000000",
+                  "name": "post_id_range_d2a78334",
+                  "prefix": "post_id_range"
                 }
               ],
               "columns": {
@@ -164,6 +184,11 @@
                   },
                   "nullable": false
                 },
+                "title": {
+                  "codecId": "pg/text@1",
+                  "dataType": "pg/text",
+                  "nullable": false
+                },
                 "userId": {
                   "codecId": "pg/text@1",
                   "dataType": "pg/text",
@@ -173,16 +198,23 @@
               "foreignKeys": [],
               "indexes": [
                 {
-                  "columns": ["body"],
-                  "name": "post_body_search_6de135ea",
+                  "columns": ["title", "email", "body"],
+                  "name": "post_body_search_533ad467",
                   "options": {
                     "language": "english",
-                    "weightGroups": [["body"]]
+                    "weightGroups": [["title", "email"], ["body"]]
                   },
                   "prefix": "post_body_search",
                   "type": "fullText",
                   "unique": false,
-                  "where": "\"archivedAt\" IS NULL"
+                  "where": "\"archivedAt\" IS NULL\n  AND \"body\" <> ''"
+                },
+                {
+                  "columns": ["email"],
+                  "name": "post_email_live_89b60931",
+                  "prefix": "post_email_live",
+                  "unique": false,
+                  "where": "\"archivedAt\" IS NULL -- live rows only\nAND \"userId\" <> ''\n  AND \"email\" <> ''"
                 },
                 {
                   "expression": "lower(\"email\")",
@@ -208,7 +240,7 @@
         "id": "public"
       }
     },
-    "storageHash": "4215dda17e3269187b361a0cda0d3fd6329dc139d5d5b5d7cd4bd73d1597763e"
+    "storageHash": "fa771784ab8fabfd811786da7f7997b34af77ba617f2d5ce6c4b5bf1470ccbe1"
   },
   "capabilities": {
     "postgres": {

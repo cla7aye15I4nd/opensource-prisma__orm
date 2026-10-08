@@ -13,6 +13,7 @@ import {
 import type { AuthoredIndexMethod } from '@internal/sql-contract/index-naming';
 import {
   isSqlExpression,
+  readSqlExpression,
   requireSqlExpression,
   SqlExpression,
 } from '@internal/sql-contract/sql-expression';
@@ -851,7 +852,8 @@ function indexExpressionText(
   fieldCodecIds: Readonly<Record<string, string>>,
   owner: string,
 ): string {
-  if (isSqlExpression(expression)) return expression.text;
+  const sqlExpression = readSqlExpression(expression);
+  if (sqlExpression !== undefined) return sqlExpression.text;
   if (typeof expression === 'object' && expression !== null && 'render' in expression) {
     return renderedSqlText(
       expression.render(

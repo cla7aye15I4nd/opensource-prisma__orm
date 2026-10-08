@@ -19,6 +19,11 @@ const authenticated = role('authenticated');
 
 const owner = sql`"userId"::uuid = auth.uid()`;
 
+const liveRows = sql`
+  "archivedAt" IS NULL -- live rows only
+  AND "userId" <> ''
+`;
+
 const ownerOrAdmin = sql`
   "userId"::uuid = auth.uid()
     OR auth.role() = 'admin'
@@ -28,6 +33,7 @@ const Post = model('Post', {
   fields: {
     id: field.column(int4Column).id(),
     userId: field.column(textColumn),
+    title: field.column(textColumn),
     email: field.column(textColumn),
     body: field.column(textColumn),
     archivedAt: field.column(timestamptzTemporalColumn).optional(),
@@ -47,10 +53,33 @@ const Post = model('Post', {
           AND "userId" <> ''
       `,
     }),
+    constraints.index([cols.email], {
+      name: 'post_email_live',
+      where: sql`
+        ${liveRows}
+          AND "email" <> ''
+      `,
+    }),
     constraints.index({ expression: sql`lower("email")`, name: 'post_email_lower' }),
-    fullTextIndex(cols.body, { name: 'post_body_search', where: sql`"archivedAt" IS NULL` }),
+    fullTextIndex([[cols.title, cols.email], cols.body], {
+      name: 'post_body_search',
+      where: sql`
+        "archivedAt" IS NULL
+          AND "body" <> ''
+      `,
+    }),
   ],
-  checks: [check({ expression: sql`"email" !~ '\s'`, name: 'post_email_no_space' })],
+  checks: [
+    check({ expression: sql`"email" !~ '\s'`, name: 'post_email_no_space' }),
+    check({ expression: sql`"email" <> 'x\`y'`, name: 'post_email_not_backtick' }),
+    check({
+      expression: sql`
+		"id" > 0
+			AND "id" < 1000000
+	`,
+      name: 'post_id_range',
+    }),
+  ],
 }));
 
 export const contract = defineContract({

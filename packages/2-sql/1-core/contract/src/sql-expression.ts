@@ -126,12 +126,24 @@ export class SqlExpression {
   }
 }
 
+/** Whether `value` is a `sql` value, made by this copy of the package or by another one. */
 export function isSqlExpression(value: unknown): value is SqlExpression {
   return (
     typeof value === 'object' &&
     value !== null &&
-    Reflect.get(value, SQL_EXPRESSION_MARKER) === true
+    Reflect.get(value, SQL_EXPRESSION_MARKER) === true &&
+    typeof Reflect.get(value, 'text') === 'string'
   );
+}
+
+/**
+ * This copy's `SqlExpression` for `value`: the value itself when this copy made it, a new one built
+ * from the text of a `sql` value another copy made, so that text is canonicalized here too, or
+ * `undefined` for anything else.
+ */
+export function readSqlExpression(value: unknown): SqlExpression | undefined {
+  if (value instanceof SqlExpression) return value;
+  return isSqlExpression(value) ? new SqlExpression(value.text) : undefined;
 }
 
 /** Raw SQL written as a template literal: `` sql`"userId" = auth.uid()` ``. Other `sql` values may be interpolated; each later line of one takes the indentation of the template line it sits on. */
@@ -169,9 +181,10 @@ function indentOfLastLine(templatePiece: string): string {
 
 const LEADING_WHITESPACE = /^[ \t]*/;
 
-/** Returns `value` when it is a `SqlExpression`; throws for anything else. For callers that JavaScript cannot type-check. */
+/** Reads `value` with `readSqlExpression`; throws for anything that is not a `sql` value. For callers that JavaScript cannot type-check. */
 export function requireSqlExpression(value: unknown, what: string): SqlExpression {
-  if (isSqlExpression(value)) return value;
+  const expression = readSqlExpression(value);
+  if (expression !== undefined) return expression;
   throw contractError('CONTRACT.ARGUMENT_INVALID', `${what} must be a sql\`...\` value.`, {
     meta: { what },
   });

@@ -400,6 +400,11 @@ describe('isSqlExpression', () => {
       true,
     ],
     ['an object with a text', { text: 'x' }, false],
+    [
+      'a marked object whose text is not a string',
+      { [Symbol.for('@prisma/sql-expression')]: true, text: 1 },
+      false,
+    ],
     ['a string', 'x', false],
     ['null', null, false],
     ['undefined', undefined, false],
@@ -409,12 +414,27 @@ describe('isSqlExpression', () => {
 });
 
 describe('requireSqlExpression', () => {
-  it('returns a sql value', () => {
+  const marker = Symbol.for('@prisma/sql-expression');
+
+  it('returns a sql value this copy made as the same object', () => {
     const value = sql`x`;
     expect(requireSqlExpression(value, 'Index "a" where')).toBe(value);
   });
 
-  it.each([['x'], [1], [{ text: 'x' }], [undefined]])(
+  it('canonicalizes the text of a sql value another copy made', () => {
+    const value = { [marker]: true, text: '\n    a = 1\n      AND b\n  ' };
+    const read = requireSqlExpression(value, 'Index "a" where');
+    expect(read).toBeInstanceOf(SqlExpression);
+    expect(read.text).toBe('a = 1\n  AND b');
+  });
+
+  it('refuses a NUL in the text of a sql value another copy made', () => {
+    expect(() =>
+      requireSqlExpression({ [marker]: true, text: 'a\u0000b' }, 'Index "a" where'),
+    ).toThrow(expect.objectContaining({ code: 'CONTRACT.SQL_EXPRESSION_INVALID' }));
+  });
+
+  it.each([['x'], [1], [{ text: 'x' }], [{ [marker]: true, text: 1 }], [undefined]])(
     'refuses %j with CONTRACT.ARGUMENT_INVALID',
     (value) => {
       expect(() => requireSqlExpression(value, 'Index "a" where')).toThrow(

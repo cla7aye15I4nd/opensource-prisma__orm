@@ -108,7 +108,7 @@ export function fullTextIndex(
 function fullTextIndexOwner(fieldNames: readonly string[], options: FullTextIndexOptions): string {
   const name = options.name ?? options.map;
   return name === undefined
-    ? `Full-text index on ${fieldNames.map((fieldName) => `"${fieldName}"`).join(', ')}`
+    ? `Full-text index on fields ${fieldNames.map((fieldName) => `"${fieldName}"`).join(', ')}`
     : `Full-text index "${name}"`;
 }
 

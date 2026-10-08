@@ -260,7 +260,7 @@ describe('fullTextIndex, the TypeScript twin of @@fullTextIndex', () => {
 
   it('refuses a string where from an untyped caller with no name or map, naming the field', () => {
     const untypedFullTextIndex = fullTextIndex as (fields: unknown, options: unknown) => never;
-    const what = 'Full-text index on "title" where';
+    const what = 'Full-text index on fields "title" where';
     expect(() =>
       indexesOf((cols) => [untypedFullTextIndex(cols.title, { where: 'id > 0' })]),
     ).toThrow(
@@ -274,7 +274,7 @@ describe('fullTextIndex, the TypeScript twin of @@fullTextIndex', () => {
 
   it('refuses a string where from an untyped caller with no name or map, naming every field', () => {
     const untypedFullTextIndex = fullTextIndex as (fields: unknown, options: unknown) => never;
-    const what = 'Full-text index on "title", "subtitle", "text" where';
+    const what = 'Full-text index on fields "title", "subtitle", "text" where';
     expect(() =>
       indexesOf((cols) => [
         untypedFullTextIndex([[cols.title, cols.subtitle], cols.text], { where: 'id > 0' }),

@@ -23,7 +23,7 @@ import type {
   FamilyPackRef,
   TargetPackRef,
 } from '@internal/framework-components/components';
-import { isSqlExpression, type SqlExpression } from '@internal/sql-contract/sql-expression';
+import { readSqlExpression, type SqlExpression } from '@internal/sql-contract/sql-expression';
 import type {
   AuthoredStorageTypeInstance,
   SqlNamespaceBase,
@@ -212,8 +212,9 @@ type DefaultArgumentOf<State> =
   | (State extends { readonly nullable: true } ? null : never);
 
 function toColumnDefault(value: unknown): AuthoredColumnDefault {
-  if (isSqlExpression(value)) {
-    return sqlExpressionDefault(value);
+  const expression = readSqlExpression(value);
+  if (expression !== undefined) {
+    return sqlExpressionDefault(expression);
   }
   if (isColumnDefault(value)) {
     return value;

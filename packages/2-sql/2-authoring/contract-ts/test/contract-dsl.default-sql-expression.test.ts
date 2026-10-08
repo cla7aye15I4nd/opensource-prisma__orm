@@ -1,5 +1,13 @@
+import { blindCast } from '@internal/utils/casts';
 import { describe, expect, it } from 'vitest';
-import { autoincrement, field, model, now, sql } from '../src/exports/contract-builder';
+import {
+  autoincrement,
+  field,
+  model,
+  now,
+  type SqlExpression,
+  sql,
+} from '../src/exports/contract-builder';
 import { columnDescriptor } from './helpers/column-descriptor';
 import { defineTestContract } from './helpers/define-test-contract';
 import { unboundTables } from './unbound-tables';
@@ -30,6 +38,17 @@ describe('.default() with a sql value', () => {
         `),
       ),
     ).toEqual({ kind: 'function', expression: "(now()\n  + '00:03:00'::interval)" });
+  });
+
+  it('lowers the canonical text of a sql value another copy of the package made', () => {
+    const fromAnotherCopy = blindCast<
+      SqlExpression,
+      "a sql value from another installed copy carries the marker but is not this copy's class"
+    >({ [Symbol.for('@prisma/sql-expression')]: true, text: '\n    a\n      + b\n  ' });
+    expect(loweredDefault(field.column(textColumn).default(fromAnotherCopy))).toEqual({
+      kind: 'function',
+      expression: 'a\n  + b',
+    });
   });
 
   it.each([
