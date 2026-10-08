@@ -38,11 +38,19 @@ import {
   type CodecLookupWithDescriptors,
   type ColumnTypeDescriptor,
   codecForRef,
+  type DataTypeLookup,
+  enumRefusalOf,
 } from '@internal/framework-components/codec';
 import { mergeCapabilityMatrices } from '@internal/framework-components/components';
 import { UNBOUND_NAMESPACE_ID } from '@internal/framework-components/ir';
 import { lowerAuthoredCheck } from '@internal/sql-contract/authored-check-naming';
 import { sqlContractCanonicalizationHooks } from '@internal/sql-contract/canonicalization-hooks';
+import {
+  dataTypeParams,
+  type SqlDataType,
+  sqlDataTypeOfCodec,
+  validateSqlTypeParams,
+} from '@internal/sql-contract/data-type';
 import { tableEntityKind, valueSetEntityKind } from '@internal/sql-contract/entity-kinds';
 import {
   type ForeignKeyAuthoringInput,
@@ -50,12 +58,9 @@ import {
 } from '@internal/sql-contract/foreign-key-materialization';
 import { type AuthoredIndexInput, lowerAuthoredIndex } from '@internal/sql-contract/index-naming';
 import { validateIndexTypes } from '@internal/sql-contract/index-type-validation';
+import { type IndexTypeRegistry, indexTypeRegistryOf } from '@internal/sql-contract/index-types';
 import {
-  createIndexTypeRegistry,
-  type IndexTypeMap,
-  type IndexTypeRegistration,
-} from '@internal/sql-contract/index-types';
-import {
+  type AuthoredStorageTypeInstance,
   applyFkDefaults,
   CheckConstraint,
   Index,
@@ -104,16 +109,18 @@ import { toOneNullabilityContradictionMessage } from './to-one-nullability-messa
 function columnCodec(
   codecId: string,
   typeParams: Record<string, unknown> | undefined,
-  codecLookup?: CodecLookupWithDescriptors,
+  codecLookup: CodecLookupWithDescriptors,
 ): Codec | undefined {
-  if (codecLookup === undefined) return undefined;
   return codecForRef(codecLookup, {
     codecId,
     ...ifDefined(
       'typeParams',
       typeParams === undefined
         ? undefined
-        : blindCast<JsonValue, 'typeParams are validated by the codec paramsSchema'>(typeParams),
+        : blindCast<
+            JsonValue,
+            'a CodecRef types typeParams as JSON because contract.json stores them; materializeCodec checks them against the codec paramsSchema before the factory sees them'
+          >(typeParams),
     ),
   });
 }
@@ -163,7 +170,7 @@ function defaultRefusal(
 
 function encodeDefaultValue(
   value: unknown,
-  codec: Codec | undefined,
+  codec: Codec,
   site: ColumnDefaultSite,
   elementPosition?: number,
 ): JsonValue {
@@ -176,11 +183,10 @@ function encodeDefaultValue(
 }
 
 function codecForDefault(
-  codecLookup: CodecLookupWithDescriptors | undefined,
+  codecLookup: CodecLookupWithDescriptors,
   resolveCodec: (codecLookup: CodecLookupWithDescriptors) => Codec | undefined,
   site: ColumnDefaultSite,
-): Codec | undefined {
-  if (codecLookup === undefined) return undefined;
+): Codec {
   const codec = buildCodecForDefault(codecLookup, resolveCodec, site);
   if (codec === undefined) {
     throw contractError(
@@ -226,7 +232,7 @@ function buildCodecForDefault(
 
 function encodeColumnDefault(
   defaultInput: AuthoredColumnDefault,
-  codecLookup: CodecLookupWithDescriptors | undefined,
+  codecLookup: CodecLookupWithDescriptors,
   resolveCodec: (codecLookup: CodecLookupWithDescriptors) => Codec | undefined,
   site: ColumnDefaultSite,
   many = false,
@@ -282,8 +288,9 @@ function encodeColumnDefault(
 }
 
 function assertStorageSemantics(
-  definition: ContractDefinition,
   contract: Contract<SqlStorage>,
+  indexTypeRegistry: IndexTypeRegistry,
+  codecLookup: CodecLookupWithDescriptors,
 ): void {
   const semanticErrors = validateStorageSemantics(contract.storage);
   if (semanticErrors.length > 0) {
@@ -293,35 +300,11 @@ function assertStorageSemantics(
       { meta: { errors: semanticErrors } },
     );
   }
-
-  const indexTypeRegistry = createIndexTypeRegistry();
-  const packsToRegister: ReadonlyArray<{ readonly id?: string; readonly indexTypes?: unknown }> = [
-    definition.target,
-    ...Object.values(definition.extensions ?? {}),
-  ];
-  for (const pack of packsToRegister) {
-    const registration = pack.indexTypes;
-    if (registration === undefined) continue;
-    if (
-      typeof registration !== 'object' ||
-      registration === null ||
-      !('entries' in registration) ||
-      !Array.isArray(registration.entries)
-    ) {
-      throw contractError(
-        'CONTRACT.PACK_CONTRIBUTION_INVALID',
-        `Pack "${pack.id ?? '<unknown>'}" declares "indexTypes" but its value is not an IndexTypeRegistration (expected an object with an "entries" array; got ${typeof registration}).`,
-        { meta: { packId: pack.id, contribution: 'indexTypes', reason: 'invalid-shape' } },
-      );
-    }
-    for (const entry of blindCast<
-      IndexTypeRegistration<IndexTypeMap>,
-      'checked above to be an object with an entries array; each entry is validated when registered'
-    >(registration).entries) {
-      indexTypeRegistry.register(entry);
-    }
-  }
-  validateIndexTypes(contract, indexTypeRegistry);
+  validateIndexTypes(
+    contract,
+    indexTypeRegistry,
+    (codecId) => codecLookup.descriptorFor(codecId)?.traits,
+  );
 }
 
 function assertKnownTargetModel(
@@ -376,7 +359,7 @@ function assertTargetTableMatches(
  * Resolves a deferred entity-ref column descriptor (e.g. a `pg.enum(handle)`
  * column) against the field's now-known owning namespace: attaches the
  * storage `valueSet` ref the collected entity's derived value-set is stored
- * under. `nativeType` / `typeParams.typeName` stay bare here — schema
+ * under. `typeParams.typeName` stays bare here — schema
  * qualification (e.g. `auth.aal_level`) is a target concern applied in the
  * next step, `qualifyColumnDescriptor`. A descriptor with no `entityRef` (the
  * ordinary case) passes through unchanged.
@@ -412,11 +395,10 @@ function resolveEntityRefDescriptor(
 type ColumnTypeQualifier = (
   input: {
     readonly codecId: string;
-    readonly nativeType: string;
     readonly typeParams?: Record<string, unknown>;
   },
   namespaceId: string,
-) => { readonly nativeType: string; readonly typeParams?: Record<string, unknown> };
+) => { readonly typeParams?: Record<string, unknown> };
 
 /**
  * Structural check for a target that contributes a `qualifyColumnType` hook
@@ -548,15 +530,27 @@ function encodeEnumMember(
 }
 
 /**
- * Each member's value in the form the enum's codec stores it, read back by the codec. A member the
- * codec refuses, a member written differently from how it is stored, and two members that store the
- * same value are each a `CONTRACT.ENUM_INVALID` naming the members at fault.
+ * Each member's value in the form the enum's codec stores it, read back by the codec. A codec an
+ * enum cannot use, a member the codec refuses, a member written differently from how it is stored,
+ * and two members that store the same value are each a `CONTRACT.ENUM_INVALID`.
  */
 function encodeEnumMembers(
   handle: EnumTypeHandle,
-  codecLookup: CodecLookupWithDescriptors | undefined,
+  codecLookup: CodecLookupWithDescriptors,
 ): readonly { readonly name: string; readonly value: JsonValue }[] {
-  const codec = codecLookup?.get(handle.codecId);
+  const descriptor = codecLookup.descriptorFor(handle.codecId);
+  const enumRefusal = descriptor === undefined ? undefined : enumRefusalOf(descriptor);
+  if (enumRefusal !== undefined) {
+    throw contractError(
+      'CONTRACT.ENUM_INVALID',
+      `enumType("${handle.enumName}"): an enum cannot use the codec ${handle.codecId}. ${enumRefusal}`,
+      {
+        fix: 'Type the enum with another codec.',
+        meta: { enumName: handle.enumName, codecId: handle.codecId, reason: 'codec-not-for-enums' },
+      },
+    );
+  }
+  const codec = codecLookup.get(handle.codecId);
   const memberByStoredValue = new Map<string, string>();
   return handle.enumMembers.map((member) => {
     const value = encodeEnumMember(handle, member, codec);
@@ -587,7 +581,7 @@ function encodeEnumMembers(
  */
 function checkMemberValues(
   handle: EnumTypeHandle,
-  codecLookup: CodecLookupWithDescriptors | undefined,
+  codecLookup: CodecLookupWithDescriptors,
 ): readonly (string | number)[] {
   const encoded = encodeEnumMembers(handle, codecLookup).map((member) => member.value);
   const values: (string | number)[] = [];
@@ -597,13 +591,6 @@ function checkMemberValues(
         'CONTRACT.ENUM_INVALID',
         `enumType("${handle.enumName}"): CHECK constraint members must encode to strings or finite numbers.`,
         { meta: { enumName: handle.enumName, reason: 'unsupported-member-value' } },
-      );
-    }
-    if (typeof value !== typeof encoded[0]) {
-      throw contractError(
-        'CONTRACT.ENUM_INVALID',
-        `enumType("${handle.enumName}"): CHECK constraint members must encode to the same primitive type; mixed strings and numbers are not supported.`,
-        { meta: { enumName: handle.enumName, reason: 'mixed-member-types' } },
       );
     }
     values.push(value);
@@ -721,20 +708,15 @@ function qualifyColumnDescriptor(
   const qualified = qualify(
     {
       codecId: descriptor.codecId,
-      nativeType: descriptor.nativeType,
       ...ifDefined('typeParams', descriptor.typeParams),
     },
     namespaceId,
   );
-  if (
-    qualified.nativeType === descriptor.nativeType &&
-    qualified.typeParams === descriptor.typeParams
-  ) {
+  if (qualified.typeParams === descriptor.typeParams) {
     return descriptor;
   }
   return {
     ...descriptor,
-    nativeType: qualified.nativeType,
     ...ifDefined('typeParams', qualified.typeParams),
   };
 }
@@ -910,13 +892,36 @@ function targetColumnsForJunction(targetModel: ModelNode, fieldName: string): re
   );
 }
 
+function validateColumnTypeParams(
+  dataType: SqlDataType,
+  typeParams: Record<string, unknown> | undefined,
+  site: { readonly modelName: string; readonly fieldName: string },
+): void {
+  try {
+    validateSqlTypeParams(dataType, dataTypeParams(dataType, typeParams));
+  } catch (cause) {
+    if (!isStructuredError(cause) || cause.code !== 'CONTRACT.TYPE_PARAMS_INVALID') throw cause;
+    throw contractError(
+      'CONTRACT.TYPE_PARAMS_INVALID',
+      `Field "${site.modelName}.${site.fieldName}" has type parameters that its data type does not accept: ${cause.message}`,
+      { cause, meta: { ...cause.meta, modelName: site.modelName, fieldName: site.fieldName } },
+    );
+  }
+}
+
+interface TypeLookups {
+  readonly codecLookup: CodecLookupWithDescriptors;
+  readonly dataTypeLookup: DataTypeLookup;
+}
+
 function buildStorageColumn(
   field: FieldNode | ValueObjectFieldNode,
   enumRefs: EnumValueSetRefs | undefined,
   modelName: string,
-  storageTypes: Record<string, StorageTypeInstance>,
-  codecLookup?: CodecLookupWithDescriptors,
+  storageTypes: Record<string, AuthoredStorageTypeInstance>,
+  lookups: TypeLookups,
 ): StorageColumn {
+  const { codecLookup } = lookups;
   const { descriptor } = field;
   const codecId = descriptor.codecId;
   const isListColumn = storedAsListColumn({
@@ -924,12 +929,15 @@ function buildStorageColumn(
     typedByValueObject: isValueObjectMember(field),
   });
   const noCheck = isValueObjectMember(field) ? undefined : field.noCheck;
+  const typeParams = resolvedTypeParams(descriptor, storageTypes);
+  const dataType = sqlDataTypeOfCodec(codecId, lookups);
+  validateColumnTypeParams(dataType, typeParams, { modelName, fieldName: field.fieldName });
   const encodedDefault =
     field.default !== undefined
       ? encodeColumnDefault(
           field.default,
           codecLookup,
-          (lookup) => columnCodec(codecId, resolvedTypeParams(descriptor, storageTypes), lookup),
+          (lookup) => columnCodec(codecId, typeParams, lookup),
           { modelName, fieldName: field.fieldName, codecId },
           isListColumn,
           field.elementNullable === true,
@@ -943,7 +951,7 @@ function buildStorageColumn(
   const valueSet = enumRefs?.storage ?? descriptor.valueSet;
 
   return {
-    nativeType: descriptor.nativeType,
+    dataType: dataType.id,
     codecId,
     nullable: field.nullable,
     many: isListColumn ? { elementNullable: field.elementNullable === true } : false,
@@ -978,7 +986,7 @@ function enumValueSetRefs(
 function buildDomainField(
   field: ScalarMemberNode | ValueObjectMemberNode,
   defaultNamespaceId: string,
-  storageTypes: Record<string, StorageTypeInstance>,
+  storageTypes: Record<string, AuthoredStorageTypeInstance>,
 ): ContractField {
   if (isValueObjectMember(field)) {
     return {
@@ -1174,10 +1182,16 @@ function columnsProducingCheckPrefix(
 
 export function buildSqlContractFromDefinition(
   definition: ContractDefinition,
-  codecLookup?: CodecLookupWithDescriptors,
+  codecLookup: CodecLookupWithDescriptors,
+  dataTypeLookup: DataTypeLookup,
 ): Contract<SqlStorage> {
+  const lookups: TypeLookups = { codecLookup, dataTypeLookup };
   const target = definition.target.targetId;
   const defaultNamespaceId = definition.target.defaultNamespaceId;
+  const indexTypeRegistry = indexTypeRegistryOf(
+    definition.target,
+    Object.values(definition.extensions ?? {}),
+  );
   const qualifyColumnType = resolveColumnTypeQualifier(definition.target);
   const renderCheckExpressions = resolveCheckExpressionRenderer(definition.target);
   const targetFamily = 'sql';
@@ -1327,7 +1341,7 @@ export function buildSqlContractFromDefinition(
         enumValueSetRefs(enumHandle, defaultNamespaceId),
         semanticModel.modelName,
         definition.storageTypes ?? {},
-        codecLookup,
+        lookups,
       );
       const columnMany = column.many ?? false;
       columns[field.columnName] = column;
@@ -1457,8 +1471,9 @@ export function buildSqlContractFromDefinition(
         columns: u.columns,
         ...ifDefined('name', u.name),
       }));
-      const declaredIndexes = (semanticModel.indexes ?? []).map((i) =>
-        lowerAuthoredIndex(
+      const declaredIndexes = (semanticModel.indexes ?? []).map((i) => ({
+        namedByUser: i.name !== undefined || i.map !== undefined,
+        index: lowerAuthoredIndex(
           tableName,
           blindCast<
             AuthoredIndexInput,
@@ -1474,8 +1489,9 @@ export function buildSqlContractFromDefinition(
             options: i.options,
           }),
           authoringWarnings,
+          indexTypeRegistry,
         ),
-      );
+      }));
       // Authored checks are lowered and merged into `checksForTable`
       // unconditionally — outside the `derivesChecks` guard above. A derived
       // check is a Prisma 8 prescription, scoped to tables it manages; an
@@ -1505,22 +1521,15 @@ export function buildSqlContractFromDefinition(
       const primaryKey = semanticModel.id
         ? { columns: semanticModel.id.columns, ...ifDefined('name', semanticModel.id.name) }
         : undefined;
-      // FK1: lower each FK's `constraint`/`index` authoring intent into
-      // discrete persisted entities here — the one place a table's full
-      // constraint context (its own declared indexes/uniques/primary key)
-      // is available. A `constraint: false` FK contributes no
-      // `foreignKeys[]` entry; an `index: true` FK not already backed by a
-      // declared index/unique/primary-key contributes a named `indexes[]`
-      // entry. This authoring pipeline is shared by both the TS DSL and the
-      // PSL interpreter (which calls `buildSqlContractFromDefinition`
-      // directly), so both authoring surfaces materialize identically.
-      const { foreignKeys, indexes } = materializeForeignKeysAndIndexes(
+      const { foreignKeys, indexes } = materializeForeignKeysAndIndexes({
         tableName,
-        authoringForeignKeys,
+        foreignKeys: authoringForeignKeys,
         declaredIndexes,
         uniques,
         primaryKey,
-      );
+        warnings: authoringWarnings,
+        indexTypes: indexTypeRegistry,
+      });
 
       const tableInput: StorageTableInput = {
         columns,
@@ -1688,20 +1697,18 @@ export function buildSqlContractFromDefinition(
   // Normalise raw codec-triple inputs to the `kind: 'codec-instance'`
   // discriminator shape before hashing so the storageHash matches the
   // persisted JSON envelope produced from the SqlStorage class instance
-  // (which always carries the discriminator).
+  // (which always carries the discriminator). Each entry stores the data type
+  // its codec represents.
   const rawStorageTypes = definition.storageTypes ?? {};
   const documentTypes: Record<string, StorageTypeInstance> = Object.fromEntries(
-    Object.entries(rawStorageTypes).map(([name, entry]) => {
-      if ('kind' in entry && entry.kind === 'codec-instance') return [name, entry];
-      return [
-        name,
-        toStorageTypeInstance({
-          codecId: entry.codecId,
-          nativeType: entry.nativeType,
-          typeParams: ('typeParams' in entry ? entry.typeParams : undefined) ?? {},
-        }),
-      ];
-    }),
+    Object.entries(rawStorageTypes).map(([name, entry]) => [
+      name,
+      toStorageTypeInstance({
+        codecId: entry.codecId,
+        dataType: sqlDataTypeOfCodec(entry.codecId, lookups).id,
+        typeParams: entry.typeParams,
+      }),
+    ]),
   );
   const namespaceCoordinateIds = collectStorageNamespaceCoordinateIds(definition);
 
@@ -1888,7 +1895,7 @@ export function buildSqlContractFromDefinition(
     meta: {},
   };
 
-  assertStorageSemantics(definition, contract);
+  assertStorageSemantics(contract, indexTypeRegistry, codecLookup);
   flushAuthoringWarnings(authoringWarnings);
 
   return contract;

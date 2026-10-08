@@ -15,6 +15,8 @@ import { instantiateAuthoringFieldPreset } from '@internal/framework-components/
 import type {
   CodecLookupWithDescriptors,
   ColumnTypeDescriptor,
+  DataTypeLookup,
+  ScalarFieldDeclarationBuilder,
 } from '@internal/framework-components/codec';
 import type {
   ExtensionPackRef,
@@ -23,9 +25,9 @@ import type {
 } from '@internal/framework-components/components';
 import { isSqlExpression, type SqlExpression } from '@internal/sql-contract/sql-expression';
 import type {
+  AuthoredStorageTypeInstance,
   SqlNamespaceBase,
   SqlNamespaceInput,
-  StorageTypeInstance,
 } from '@internal/sql-contract/types';
 import { checkSqlDefaultText, reservedSqlDefaultText } from '@internal/sql-contract/validators';
 import { blindCast } from '@internal/utils/casts';
@@ -43,7 +45,7 @@ export type NamingConfig = {
   readonly columns?: NamingStrategy;
 };
 
-type NamedStorageTypeRef = string | StorageTypeInstance | EnumTypeHandle;
+type NamedStorageTypeRef = string | AuthoredStorageTypeInstance | EnumTypeHandle;
 
 type NamedConstraintNameSpec<Name extends string = string> = {
   readonly name: Name;
@@ -262,7 +264,9 @@ export type ManyOptions =
   | { readonly elementsNullable: true }
   | { readonly elementsNullable: false };
 
-export class ScalarFieldBuilder<State extends AnyScalarFieldState = AnyScalarFieldState> {
+export class ScalarFieldBuilder<State extends AnyScalarFieldState = AnyScalarFieldState>
+  implements ScalarFieldDeclarationBuilder
+{
   declare readonly __state: State;
 
   constructor(private readonly state: State) {}
@@ -610,7 +614,7 @@ export type NamedTypeFieldHelper<CodecTypes extends CodecTypeMap = CodecTypesOfN
   <TypeRef extends string>(
     typeRef: TypeRef,
   ): ScalarFieldBuilder<ScalarFieldState<ColumnTypeDescriptor, TypeRef, false, undefined>>;
-  <TypeRef extends StorageTypeInstance>(
+  <TypeRef extends AuthoredStorageTypeInstance>(
     typeRef: TypeRef,
   ): ScalarFieldBuilder<
     ScalarFieldState<
@@ -943,7 +947,7 @@ type IndexInput<
       | {
           readonly [K in keyof IndexTypes & string]: IndexOptionsBase<Name> & {
             readonly type: K;
-            readonly options: IndexTypes[K]['options'];
+            readonly options: IndexOptionsInput<IndexTypes[K]['options']>;
           };
         }[keyof IndexTypes & string];
 
@@ -962,7 +966,10 @@ type ForeignKeyOptions<Name extends string | undefined = string | undefined> =
     readonly onDelete?: 'noAction' | 'restrict' | 'cascade' | 'setNull' | 'setDefault';
     readonly onUpdate?: 'noAction' | 'restrict' | 'cascade' | 'setNull' | 'setDefault';
     readonly constraint?: boolean;
-    readonly index?: boolean;
+    /**
+     * `false` for no backing index, or the name of an index, unique constraint or primary key the table declares, used instead of a derived backing index. The name is the `name` or `map` it was given, or an index's stored name, and its first columns must be the foreign key's columns in order.
+     */
+    readonly index?: boolean | string;
   };
 
 type BelongsToRelationSqlSpec<Name extends string | undefined = string | undefined> = {
@@ -1011,6 +1018,20 @@ export type DeferredIndexExpression = {
 /** Opaque SQL, either written out or rendered at lowering. */
 export type IndexExpressionInput = SqlExpression | DeferredIndexExpression;
 
+/**
+ * Index options rendered at lowering from the storage columns the index covers, in order: its
+ * `fields`, or the `fields` of a deferred expression. For options that name columns, which authoring
+ * code cannot know.
+ */
+export type DeferredIndexOptions<Options = Record<string, unknown>> = (
+  columns: readonly DeferredIndexColumn[],
+) => Options;
+
+/** Options, either written out or rendered at lowering. */
+export type IndexOptionsInput<Options = Record<string, unknown>> =
+  | Options
+  | DeferredIndexOptions<Options>;
+
 /** An authored index constraint's element structure — field tuple xor expression. */
 export type IndexConstraintElements<FieldNames extends readonly string[] = readonly string[]> =
   | {
@@ -1027,7 +1048,7 @@ export type IndexConstraintElements<FieldNames extends readonly string[] = reado
 /** Options only exist as options of a type, so the pair is one union. */
 export type IndexConstraintMethod =
   | { readonly type?: undefined; readonly options?: undefined }
-  | { readonly type: string; readonly options?: Record<string, unknown> };
+  | { readonly type: string; readonly options?: IndexOptionsInput };
 
 export type IndexConstraint<
   FieldNames extends readonly string[] = readonly string[],
@@ -1085,7 +1106,7 @@ export type ForeignKeyConstraint<
   readonly onDelete?: 'noAction' | 'restrict' | 'cascade' | 'setNull' | 'setDefault';
   readonly onUpdate?: 'noAction' | 'restrict' | 'cascade' | 'setNull' | 'setDefault';
   readonly constraint?: boolean;
-  readonly index?: boolean;
+  readonly index?: boolean | string;
 };
 
 function normalizeFieldRefInput(input: ColumnRef | readonly ColumnRef[]): readonly string[] {
@@ -1260,8 +1281,8 @@ function createConstraintsDsl<IndexTypes extends IndexTypeMap = Record<never, ne
       ...(opts?.options !== undefined
         ? {
             options: blindCast<
-              Record<string, unknown>,
-              'the public overloads type options as the pack-declared options object; the loose implementation signature erases it to unknown'
+              IndexOptionsInput,
+              'the public overloads type options as the pack-declared options object or a function of the covered columns that returns it; the loose implementation signature erases it to unknown'
             >(opts.options),
           }
         : {}),
@@ -1955,7 +1976,7 @@ function normalizeRelationModelSource(
 export type ContractInput<
   Family extends FamilyPackRef<string> = FamilyPackRef<string>,
   Target extends TargetPackRef<'sql', string> = TargetPackRef<'sql', string>,
-  Types extends Record<string, StorageTypeInstance> = Record<never, never>,
+  Types extends Record<string, AuthoredStorageTypeInstance> = Record<never, never>,
   Models extends Record<
     string,
     ContractModelBuilder<
@@ -2016,7 +2037,10 @@ export type ContractInput<
   readonly createNamespace: (input: SqlNamespaceInput) => SqlNamespaceBase;
   readonly types?: Types;
   readonly models?: Models;
-  readonly codecLookup?: CodecLookupWithDescriptors;
+  /** The codecs of the packs the contract is authored with; a column's database type is its codec's data type's. */
+  readonly codecLookup: CodecLookupWithDescriptors;
+  /** The data types of the packs the contract is authored with. */
+  readonly dataTypeLookup: DataTypeLookup;
   /**
    * Domain enum handles authored via `enumType()`. Each handle lowers to a
    * domain `enum` entry and a storage `valueSet` entry in the target's

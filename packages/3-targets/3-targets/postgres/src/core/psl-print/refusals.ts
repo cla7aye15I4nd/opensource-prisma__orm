@@ -18,6 +18,7 @@ import { UNBOUND_NAMESPACE_ID } from '@internal/framework-components/ir';
 import { UNBOUND_PSL_NAMESPACE_NAME } from '@internal/framework-components/psl-ast';
 import { canonicalizeJson } from '@internal/framework-components/utils';
 import { isPslIdentifier, NAME_THE_PSL_SOURCE_LOSES } from '@internal/psl-parser';
+import { escapePslString } from '@internal/sql-contract/data-type-support';
 import { sqlTextsReadBack } from '@internal/sql-contract/sql-expression';
 import {
   type ForeignKey,
@@ -26,7 +27,6 @@ import {
   type SqlStorage,
   StorageColumn,
 } from '@internal/sql-contract/types';
-import { escapePslString } from '@internal/sql-relational-core/ast';
 import { ifDefined } from '@internal/utils/defined';
 import { PG_ENUM_CODEC_ID } from '../codec-ids';
 import { postgresError } from '../errors';
@@ -63,10 +63,10 @@ function sameValues(left: readonly unknown[], right: readonly unknown[]): boolea
 
 export function refuseColumnWithoutPslType(column: StorageColumn, coordinate: string): never {
   throw unsupported(
-    `column ${coordinate} has native type "${column.nativeType}" with codec "${column.codecId}", and no PSL type in the configured stack produces that pair.`,
-    'A column is written as a PSL type that reads back with its codec and native type, and none of the types the target, adapter and extensions contribute does.',
+    `column ${coordinate} has data type "${column.dataType}" with codec "${column.codecId}", and no PSL type in the configured stack produces that pair.`,
+    'A column is written as a PSL type that reads back with its codec and data type, and none of the types the target, adapter and extensions contribute does.',
     'Add the extension that contributes this type to the config, or keep authoring this contract in its current source.',
-    { coordinate, nativeType: column.nativeType, codecId: column.codecId },
+    { coordinate, dataType: column.dataType, codecId: column.codecId },
   );
 }
 
@@ -370,22 +370,22 @@ export function refuseStorageOfUndeclaredField(input: {
 
 /**
  * Refuses a column typed by a named type when the contract declares no such type, or when the
- * column's native type or codec is not the named type's. PSL writes the column as the name of the
+ * column's data type or codec is not the named type's. PSL writes the column as the name of the
  * type, and the PSL source copies both from the named type.
  */
 export function refuseColumnDifferingFromNamedType(input: {
   readonly column: StorageColumn;
   readonly typeRef: string;
-  readonly namedType: { readonly nativeType: string; readonly codecId: string } | undefined;
+  readonly namedType: { readonly dataType: string; readonly codecId: string } | undefined;
   readonly coordinate: string;
 }): void {
   const { column, typeRef, namedType, coordinate } = input;
-  if (namedType?.nativeType === column.nativeType && namedType.codecId === column.codecId) return;
+  if (namedType?.dataType === column.dataType && namedType.codecId === column.codecId) return;
   throw unsupported(
     namedType === undefined
       ? `column ${coordinate} is typed by the named type "${typeRef}", which the contract does not declare, so it cannot be written in Prisma 8 PSL.`
-      : `column ${coordinate} is typed by the named type "${typeRef}" but has a different native type or codec from it, which cannot be written in Prisma 8 PSL.`,
-    'PSL writes such a column as the name of its named type, and the PSL source gives the column the native type and codec of that named type.',
+      : `column ${coordinate} is typed by the named type "${typeRef}" but has a different data type or codec from it, which cannot be written in Prisma 8 PSL.`,
+    'PSL writes such a column as the name of its named type, and the PSL source gives the column the data type and codec of that named type.',
     'Make the column and its named type agree, or keep authoring this contract in its current source.',
     { coordinate, typeRef },
   );
@@ -467,7 +467,7 @@ export function refuseUnderivedVariantLink(entry: ModelWithTable, variant: Varia
       base === undefined
         ? undefined
         : new StorageColumn({
-            nativeType: base.nativeType,
+            dataType: base.dataType,
             codecId: base.codecId,
             nullable: false,
             ...ifDefined('typeParams', base.typeParams),
@@ -650,7 +650,7 @@ export function refuseSqlTextThatDoesNotReadBack(
   const { subject, meta } = describeSqlTextOwner(input);
   throw unsupported(
     `${subject} holds SQL that a sql literal cannot write back unchanged, so it cannot be written in Prisma 8 PSL.`,
-    'A sql literal is canonicalized when it is read: indentation shared by every line, a blank first or last line, a carriage return and a whitespace-only line are removed, so this text would read back as different SQL.',
+    'A sql literal is canonicalized when it is read: indentation shared by every line, blank lines at the start or end, a carriage return and a whitespace-only line are removed, so this text would read back as different SQL.',
     "Write the SQL in that canonical form in the contract's source, or keep authoring this contract in its current source.",
     meta,
   );
@@ -663,6 +663,18 @@ export function refuseToOneRelationWithoutForeignKey(modelName: string, fieldNam
     `relation "${modelName}.${fieldName}" has no foreign key in storage, which Prisma 8 PSL cannot express.`,
     'A to-one relation is authored as `@relation(fields:…, references:…)`, which always lowers to a foreign key.',
     'Declare a foreign key for the relation, or keep authoring this contract in its current source.',
+    { model: modelName, field: fieldName },
+  );
+}
+
+/**
+ * A foreign key backed by a primary key or unique constraint that only starts with its columns is written as the relation's `index: "<name>"`, which needs the key's name; the contract states none.
+ */
+export function refuseUnnamedForeignKeyBacking(modelName: string, fieldName: string): never {
+  throw unsupported(
+    `relation "${modelName}.${fieldName}" is backed by a key with no name, which its @relation cannot name.`,
+    "The key's first columns are the foreign key's, but it has more columns, so a relation that names nothing would get its own backing index instead.",
+    'Give the key a name, or keep authoring this contract in its current source.',
     { model: modelName, field: fieldName },
   );
 }

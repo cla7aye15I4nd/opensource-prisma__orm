@@ -6,7 +6,7 @@
 
 import { type Contract, coreHash, profileHash } from '@internal/contract/types';
 import type { ExecuteRequestLowerer } from '@internal/family-sql/control-adapter';
-import { APP_SPACE_ID } from '@internal/framework-components/control';
+import { APP_SPACE_ID, planOriginOf } from '@internal/framework-components/control';
 import type { SerializedIndex } from '@internal/sql-contract/types';
 import {
   CheckConstraint,
@@ -29,6 +29,7 @@ import { PostgresRlsPolicy } from '../../src/core/postgres-rls-policy';
 import { type PostgresContract, PostgresSchema } from '../../src/core/postgres-schema';
 import { computeContentHash } from '../../src/core/rls/canonicalize';
 import { postgresRenderDefault } from '../../src/exports/control';
+import { postgresTypeComponents, postgresTypeLookups } from '../postgres-type-lookups';
 
 const TABLE = 'posts';
 const WRITTEN = '\n  owner_id = 1\n    AND id > 0\n';
@@ -88,8 +89,8 @@ function contractWith(
       table: {
         [TABLE]: new StorageTable({
           columns: {
-            id: { nativeType: 'int4', codecId: 'pg/int4@1', nullable: false },
-            owner_id: { nativeType: 'int4', codecId: 'pg/int4@1', nullable: false },
+            id: { dataType: 'pg/int4', codecId: 'pg/int4@1', nullable: false },
+            owner_id: { dataType: 'pg/int4', codecId: 'pg/int4@1', nullable: false },
           },
           primaryKey: { columns: ['id'] },
           foreignKeys: [],
@@ -127,10 +128,14 @@ function plan(kind: Naming, objects: readonly SqlObject[] = EVERY_OBJECT) {
     schema: contractToPostgresDatabaseSchemaNode(from, {
       annotationNamespace: 'pg',
       renderDefault: postgresRenderDefault,
+      codecLookup: postgresTypeLookups.codecLookup,
+      dataTypeLookup: postgresTypeLookups.dataTypeLookup,
     }),
     policy: { allowedOperationClasses: ['additive', 'widening', 'destructive'] },
     fromContract: from,
-    frameworkComponents: [],
+    origin: planOriginOf(from),
+    statements: [],
+    frameworkComponents: postgresTypeComponents,
     spaceId: APP_SPACE_ID,
     snapshotsImportPath: '../../snapshots',
   });
@@ -184,7 +189,7 @@ describe('a stored text that becomes canonical', () => {
       expect.objectContaining({
         id: 'rlsPolicy.public.posts.posts_owner_read_adopted.drop',
         label: 'Drop RLS policy "posts_owner_read_adopted" on "posts"',
-        operationClass: 'destructive',
+        operationClass: 'widening',
       }),
       expect.objectContaining({
         id: 'rlsPolicy.public.posts.posts_owner_read_adopted',

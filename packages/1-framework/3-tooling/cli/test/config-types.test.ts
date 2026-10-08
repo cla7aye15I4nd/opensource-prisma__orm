@@ -34,6 +34,7 @@ describe('defineConfig', () => {
       create: () => ({
         familyId: 'sql',
         deserializeContract: (contract: unknown) => contract as Contract,
+        storageNameOf: (operation) => operation.id,
         verify: async () => ({
           ok: true,
           summary: 'test',
@@ -51,14 +52,7 @@ describe('defineConfig', () => {
           },
           timings: { total: 0 },
         }),
-        sign: async () => ({
-          ok: true,
-          summary: 'test',
-          contract: { storageHash: 'test' },
-          target: { expected: 'postgres' },
-          marker: { created: true, updated: false },
-          timings: { total: 0 },
-        }),
+        signSpaces: async () => [],
         readMarker: async () => null,
         readAllMarkers: async () => new Map(),
         readLedger: async () => [],
@@ -186,7 +180,6 @@ describe('defineConfig', () => {
       dataTypes: { entries: {}, lookup: createDataTypeLookup([]) },
       codecLookup: {
         get: () => undefined,
-        targetTypesFor: () => undefined,
         renderOutputTypeFor: () => undefined,
         descriptorFor: () => undefined,
       },

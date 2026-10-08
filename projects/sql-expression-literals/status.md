@@ -2,22 +2,18 @@
 
 Read this first when you resume the project. It records where the work stands and the context that is not in the spec, design or plan. Update it at the end of every slice.
 
-## State on 2026-10-05
+## State on 2026-10-07
 
-- Slice 1 (TML-3287, #30546) merged into `main` on 2026-10-05. Slice 4 (TML-3290, #30554) merged into `main` on 2026-10-05. Slice 2t (#30539) is under review by Serhii; his `oneOf` comment is addressed: an argument type claims its shape (`ArgType.claims`), `funcCall` claims a call to its name, `oneOf` returns the one claiming alternative's result. 2b (#30550) and slice 3 (#30558) carry that change. Every branch contains `main` as of 2026-10-05.
+- Merged: slice 2a (#30534), slice 1 (#30546), slice 4 (#30554) and slice 2t (#30539, squash `b35bcd7d10`, shipped in 8.0.0-rc.16).
+- Slice 2b (TML-3288) is pull request https://github.com/prisma/orm/pull/30550 on branch `tml-3288-sql-expression-places`, base `main`. Review round 3 covered the merges of 2t and `main` and the branch's commits since round 2; its findings are fixed (see "Slice 2b review, round 3" below). Next: hand it to Will.
+- Slice 3 (TML-3289) is https://github.com/prisma/orm/pull/30558, based on the 2b branch and in conflict with it. It waits for 2b. Its branch still names the ADR `ADR 260 - Raw SQL is a value of the data type sql-expression.md`; the decision is ADR 268 now.
+- Slice 5 (stretch, TML-3297) is not started. Ask Will before starting it.
+- The decision's ADR is ADR 268, because #30641 claims 267.
+- The three publish-shell tarball tests (`all-shells-tarball`, `module-identity`, `cross-shell-tarball`) fail on this machine because `pnpm install` in the scratch project refuses `@vercel/detect-agent` as a "high-risk trust downgrade". That is the registry, not the branch. Check them in CI.
 
+## Known limits
 
-- Slice 3 (TML-3289) is on branch `tml-3289-sql-expression-ts`, stacked on the 2b branch. Pull request: https://github.com/prisma/orm/pull/30558 (opened 2026-10-01, base `tml-3288-sql-expression-places`; retarget to `main` once #30550 merges). Two review rounds done, every finding fixed. The 2b branch, with slice 2t and `main` merged in, was merged into it as `1937f9ef5f`. Next: wait for Will to approve #30539 and #30546, then retarget and merge the stack; slice 5 (TML-3297) is a stretch slice to confirm with Will; then the close-out. `handover.md` (2026-10-05) is the handover for the next agent.
-
-- Slice 2b (TML-3288) is on branch `tml-3288-sql-expression-places`, stacked on the 2t branch. Pull request: https://github.com/prisma/orm/pull/30550 (opened 2026-09-30, base `tml-3367-data-type-value`; retarget to `main` once #30539 merges). Two review rounds done, every finding fixed. Next: slice 3 (TML-3289); its "Carried over" list in plan.md holds the deferred items.
-
-- Slice 2t (TML-3367) is on branch `tml-3367-data-type-value`, stacked on the 2a branch. Pull request: https://github.com/prisma/orm/pull/30539 (opened 2026-09-30, base `main` since #30534 merged; approved for merge by Will, auto-merge on). Two review rounds done, every finding fixed. Next: slice 2b (TML-3288) once 2a merges; its "Carried over" list in plan.md holds the deferred items from both 2t reviews.
-
-- Planning is finished. Slice 2a merged on 2026-09-30.
-- PR #30349 (the binder) merged on 2026-09-25 and PR #30381 (block specs) on 2026-09-28. Nothing outside the project blocks it.
-- Slice 2a (TML-3296) is implemented on branch `tml-3296-sql-expression-data-type`, which also carries these project files. Two review rounds are done and every finding is fixed. Pull request https://github.com/prisma/orm/pull/30534 merged to `main` on 2026-09-30 as `d0ec42633f`. [handover.md](handover.md) is the earlier handover and is superseded by this file.
-- Slice 2a changed nothing in `examples/` or `packages/3-extensions/`, so `check:upgrade-coverage` required no declaration; the two fragments under `upgrade-instructions/pending/sql-is-a-data-type/` are the ones design section 20 names.
-- The three publish-shell tarball tests (`all-shells-tarball`, `module-identity`, `cross-shell-tarball`) fail on this machine because `pnpm install` in the scratch project refuses `@vercel/detect-agent@1.2.5` as a "high-risk trust downgrade". That is the registry, not this branch. Check them in CI.
+- On SQLite, `Json`, `String` and `DateTime` columns all have the data type `sqlite/text`, and the target registers the `json` tag under the key `tag:json`. So a refused default on a SQLite `Json` column says `Expected a quoted string`, not ``Expected json`...` ``. Decided on 2026-10-07 to keep it: a quoted JSON string works on such a column, and offering ``json`...` `` would also show on `String` and `DateTime` columns.
 
 ## Slice 2a review, 2026-09-30
 
@@ -149,7 +145,7 @@ Branch `tml-3288-sql-expression-places`, on top of slice 2t. Not pushed; no pull
 - **The six places**: `@@index` and `@@check` (`984720a786`), `@@fullTextIndex(where:)` and policy `using`/`withCheck` (`907dfcb6cc`) receive `sql/expression` through `dataTypeValue`; lowering stores the canonical text. Guard test `postgres/test/sql-expression-places.test.ts`. Tests: `interpreter.sql-expression-places.test.ts`, `psl-full-text-index.test.ts`, `psl-policy-predicates.test.ts`, `sql-expression-wire-names.test.ts` (`913b8ba458`).
 - **Printers** (`f4cc10e9c2`): `contract infer` and `contract print` write index, check and policy SQL with `printSqlExpressionLiteral`; `contract infer` skips an object whose SQL does not read back, with the note of design 11.2. `sqlTextReadsBack` and the `canonicalizeTaggedLiteralBody` export (`1560661485`). Test: `psl-infer/infer-sql-expression-literals.test.ts`.
 - **Artefacts**: codemod `scripts/codemods/rewrite-sql-strings.mjs` with its test in `test:scripts` (`a0dbcbde3c`). Supabase pack contract regenerated; `contract.json` and `contract.d.ts` unchanged (`c50b808aa0`). The listed `.prisma` fixtures rewritten with the codemod (`44817e0e58`); `no-policy/contract.prisma` has no plain-string place. Inline PSL in package and integration tests rewritten. New journey `test/integration/test/cli-journeys/sql-expression-literals.e2e.test.ts` (`ce5991c385`).
-- **Docs**: ADR 255 amended (`caa1f38065`). Placeholder fragments `upgrade-instructions/pending/sql-expression-literals-psl/{app,extension}` with the change ids and detection patterns of design 20 (`dee2c93553`).
+- **Docs**: ADR 262 (then numbered 255) amended (`caa1f38065`). Placeholder fragments `upgrade-instructions/pending/sql-expression-literals-psl/{app,extension}` with the change ids and detection patterns of design 20 (`dee2c93553`).
 
 ### Design corrections
 
@@ -187,7 +183,7 @@ Same branch, not pushed, no pull request. Brief: `dispatches/2b-tooling-docs-bri
 - **Finding 1** (`1940a65a24`): `contract print` refuses an index, check or policy whose SQL a `sql` literal cannot write back unchanged, with `CONTRACT.PRINT_UNSUPPORTED` from `refuseSqlTextThatDoesNotReadBack`. Test: `postgres/test/psl-print/refusals-sql-text.test.ts`. Listed in the error reference.
 - **Finding 2** (`2437389302`): slice 1 adds the `--` case to the journey test; `plan.md` moved it. Both decisions are recorded in `dispatches/2b-findings.md`.
 - **Dispatch (c)** (`13e27e6cfd`, `9931bbbea7`): the language server colours a tagged literal (namespace, keyword tag, string per line), completes `sql` at every argument typed by a data type, and completes `@@check(` to ``check(expression: sql`${1:expression}`)``. Tests in `completion-provider.test.ts` and `semantic-tokens.test.ts`.
-- **ADR 260** (`558f77e1fa`), "Raw SQL is a value of the data type `sql/expression`". Numbered 260, not 256: `main` has ADRs 256 and 257, and open branches use 258 and 259. Every "ADR 256" reference in code, design, plan, spec and README now says 260. ADRs 129, 231, 234, 236, 243, 244, 249, 254 and 255 are amended; ADR 255's policy example now matches the code. `ADR-INDEX.md` has rows for 129, 254 and 260.
+- **ADR 268** (`558f77e1fa`), "Raw SQL is a value of the data type `sql/expression`". First numbered 260, then 267, because `main` took 260 for the `afterTransaction` stage, then 268, because #30641 also claimed 267. Every reference in code, docs, design, plan, spec and README says 268. ADRs 129, 231, 234, 236, 243, 244, 249, 254 and 262 (then numbered 255) are amended; ADR 262's policy example now matches the code. `ADR-INDEX.md` has rows for 129, 254 and 268.
 - **Docs** (`738289a20e`): the error reference, the editor tooling brief, the extensions subsystem doc, `docs/README.md`, the contract-psl and Postgres READMEs, and the `prisma-8` skill references.
 - **Upgrade fragments** (`6287c89999`): full prose for `raw-sql-is-a-sql-literal` (with the codemod as `script:`), `storage-hash-may-change-once`, `spec-contexts-carry-data-types` and `supabase-contract-writes-sql-literals`. The codemod copies are byte-identical to `scripts/codemods/rewrite-sql-strings.mjs`.
 - **Manual QA** (`0d43e333de`): slice 2b script and run in `manual-qa.md`; every case gave the expected result.
@@ -200,7 +196,7 @@ Logs in the gitignored `wip/2b-cd/`.
 - `test:packages` (`test-packages.log`): 1449 files pass, 6 fail. The three tarball tests fail on the registry refusal. `render-typescript.roundtrip.test.ts` and the two `cli-telemetry` files pass alone (`rerun-render-roundtrip.log`, `rerun-cli-telemetry.log`).
 - Integration, alone: the new journey and `test/authoring` (`integration.log`, 30 files); `test/psl-print` and the `contract-print` journey (`integration-psl-print.log`, 16 files). Supabase pack tests pass (`supabase-tests.log`, 18 files).
 - Fragments (`fragment-validation.log`): the codemod copies, run on `examples/` and `packages/3-extensions/` as they were at the merge base, reproduce the committed files exactly; those are the only non-test changes in either directory. Detection patterns tested against true positives and nearest false positives (`detection-check.log`).
-- Done-condition grep (`grep-done-condition.log`): what remains is the preserved historical example in ADR 126, the refused form quoted on purpose in ADR 129 and ADR 260, a TypeScript schema in the codec guide, the Prisma 6 and Prisma 7 fixtures, and the TypeScript examples in the contract-ts README, which are slice 3's.
+- Done-condition grep (`grep-done-condition.log`): what remains is the preserved historical example in ADR 126, the refused form quoted on purpose in ADR 129 and ADR 268, a TypeScript schema in the codec guide, the Prisma 6 and Prisma 7 fixtures, and the TypeScript examples in the contract-ts README, which are slice 3's.
 
 ### Still owed
 
@@ -213,7 +209,7 @@ Brief: `dispatches/2b-review-fixes-brief.md`. Reviews: `slice-reviews/2b/`. Comm
 
 - **A01, A02, A14, F07**: the framework has one tag-agnostic `taggedLiteralTextReadsBack`, exported from `authoring`; `canonicalizeTaggedLiteralBody` is no longer exported from `control`. `sqlTextsReadBack` is the one predicate infer and print call. `printSqlExpressionLiteral` throws for text that does not read back. Column defaults print with `printTaggedLiteral`, because they print unconditionally (`dispatches/2b-review-fixes-findings.md` finding 1). The skip note lives in `psl-infer/infer-sql-text.ts`.
 - **A03**: infer skips only exact-named objects, with the new note. A wire-named index is printed with its canonical text under the same name. Tests in `infer-sql-expression-literals.test.ts` and `infer-parse-emit.test.ts` (absent from the emitted contract).
-- **A04 to A07, A17, F03**: ADRs 129, 231, 260, the editor tooling brief, the error reference and both fragments.
+- **A04 to A07, A17, F03**: ADRs 129, 231, 267, the editor tooling brief, the error reference and both fragments.
 - **A08, A09**: `@default` argument values carry `kind` (`scalar`, `list`, `function`, `member`); a written scalar has no `ok` field; `writtenList` is generic.
 - **A10**: every `sqlAttributeSpecs` factory takes the context, and every call site passes it. ADR 249 says so.
 - **A11**: `blockSpecContext` builds every `BlockSpecContext`.
@@ -221,7 +217,7 @@ Brief: `dispatches/2b-review-fixes-brief.md`. Reviews: `slice-reviews/2b/`. Comm
 - **A13**: deferred to slice 3, in `plan.md`.
 - **A15, F02**: the codemod skips `//` and `///` comments; its test checks both fragment copies and compares its printer with the framework's. Rerun on the merge-base schemas, it reproduces every committed rewrite (`wip/2b-review-fixes/codemod-rerun/`).
 - **A16**: `createSqlBinder` requires `defaultFunctionRegistry`.
-- **F04**: `test/migrations/sql-text-canonical-planner.test.ts`. Wire-named objects: no operations. An exact-named index and check: `migration plan` stops with a conflict asking for `migration new`. An exact-named policy is dropped and created again (corrected in round 2, finding B01). The fragments and ADR 260 say so.
+- **F04**: `test/migrations/sql-text-canonical-planner.test.ts`. Wire-named objects: no operations. An exact-named index and check: `migration plan` stops with a conflict asking for `migration new`. An exact-named policy is dropped and created again (corrected in round 2, finding B01). The fragments and ADR 268 say so.
 - **F05, F06**: whole assertions. **F08**: nothing in code; the pull request description says the hook change rode in `0e83ea5e3f`.
 - Build fix: `EnumMemberDefault` and `FunctionDefault` are exported from `@internal/sql-contract-psl/attribute-specs`, so `family-sql` declarations can name them.
 
@@ -231,8 +227,8 @@ Verification at HEAD (F01), logs in `wip/2b-review-fixes/`: `build`, `typecheck`
 
 Brief: `dispatches/2b-round-2-fixes-brief.md`. Reviews: `slice-reviews/2b-round-2/`. Commits `589b2b4913` to the status commit. Not pushed, no pull request.
 
-- **G02**: canonicalization was not idempotent: it dropped one blank first line and one blank last line, so `"\n\n(a > 0)"` became `"\n(a > 0)"`, which does not read back. The canonicalizer changed: it now drops every blank line at the start and end. Canonical text is now its own canonical form and reads back once printed, so `printSqlExpressionLiteral` never throws on it; tests in `framework-components/test/tagged-literal.test.ts` and `sql-contract/test/sql-expression.test.ts`. No re-check was added to `printableIndex`. ADR 129 and ADR 260 state the rule; both fragments say the stored text changes once for a literal with two or more blank lines at an end.
-- **B01, G01**: a planner test with only a `@@map` policy whose text becomes canonical: `migration plan` drops the policy and creates it again. ADR 260 and both fragments say so.
+- **G02**: canonicalization was not idempotent: it dropped one blank first line and one blank last line, so `"\n\n(a > 0)"` became `"\n(a > 0)"`, which does not read back. The canonicalizer changed: it now drops every blank line at the start and end. Canonical text is now its own canonical form and reads back once printed, so `printSqlExpressionLiteral` never throws on it; tests in `framework-components/test/tagged-literal.test.ts` and `sql-contract/test/sql-expression.test.ts`. No re-check was added to `printableIndex`. ADR 129 and ADR 268 state the rule; both fragments say the stored text changes once for a literal with two or more blank lines at an end.
+- **B01, G01**: a planner test with only a `@@map` policy whose text becomes canonical: `migration plan` drops the policy and creates it again. ADR 268 and both fragments say so.
 - **B02**: the skip note, ADR 129 and the app fragment say that a hand-written literal still differs from the database, and give the two ways out: change the SQL in the database, or name the object without `map:` or `@@map`.
 - **B03**: the `@default` arm is `DefaultFunctionCall` with kind `default-function`; the exports stay, with a doc comment.
 - **B04, G03**: ADR 129, design section 11.2, `mapDefault` and the test name say defaults compare with case and whitespace ignored. `plan.md` records the string-constant default under slice 3 and under "Deferred beyond this project", because infer can produce it: Postgres reprints string constants unchanged.
@@ -315,6 +311,33 @@ Verification, logs in `wip/3-round-2/`: `build`, `typecheck`, `lint`, `lint:deps
 
 Built in the linked worktree `wip/wt-1` from `main`, since it depends on no other slice. Briefs: `dispatches/1-implementer-brief.md`, `dispatches/1-review-fixes-brief.md`. Reviews: `slice-reviews/1/` and `slice-reviews/1-round-2/`. Round 1 found a real bug: the SQLite migration-file renderer passed the `OpaqueSql` object to the JSON printer. Round 2 corrected the app fragment: only the wire name changes, not a policy's stored body, and the plan drops and recreates the object. PR https://github.com/prisma/orm/pull/30546.
 
+### Slice 2t wording: refusals lead with what to write, 2026-10-06
+
+Brief: `dispatches/2t-wording-brief.md`. Serhii's review of #30539 found `pg/int4 has no cast from pg/text; write a number` worse than `Expected a number`; Will agreed. Design notes item 15 records it.
+
+- `describeRefusal(refusal, support, guidance)` takes `RefusalGuidance`, `{ forms, rewrite }`. `forms` are the phrases of the new `admittedFormPhrases`; `describeAdmittedForms` joins them.
+- Messages: `Expected <forms>`; `Expected <forms>; write <literal>` for a quoted string on a type with a tag; `Expected <forms> that <type> can hold; got <value type>` when the value's written form is one of the forms; `Expected <forms>; this target has no data type for a <syntax> value`.
+- `lowerDataTypeDefault`: `no-list-cast` is `Expected <forms>; got a list`; `no-element-cast` goes through the `no-cast` rule of `describeRefusal`.
+- The brief named `taggedLiteralTextReadsBack`, which did not exist. It is new in `tagged-literal.ts`, beside `printTaggedLiteral`: it holds when the printed literal's canonical text equals the text. A string with leading indentation, for example, now gets no rewrite. The `it as a sql literal` fallback the brief mentions did not exist in the code either, so nothing was removed for it.
+- `NO_WRITTEN_FORM` is no longer exported.
+- Docs: ADR 231, ADR 254, `error-reference.md`, the contract-psl README, the pending `arguments-typed-by-data-type` and `sql-is-a-data-type` fragments, and design sections 4, 6 and 7. The `default-refusals-say-what-to-write` detection pattern for `this target has no data type` now requires `: ` or a quote before it, so it no longer matches the new messages.
+
+Review fixes (brief `dispatches/2t-wording-fixes-brief.md`, reviews in `slice-reviews/2t-wording/`): the framework's `exactRewrite` decides the exact rewrite for `dataTypeValue` and `@default` alike, so `meta Jsonb @default("{}")` says ``Expected json`...`; write json`{}` ``; it is offered only when the receiving type takes the rewritten literal. `RefusalGuidance.forms` holds `WrittenForm` values (kind, tag, phrase), and the range rule compares kinds, not phrases. `describeExpected` builds every `Expected <forms>` sentence, and `describeRefusedValueType` words the `no-cast` rule for both callers and the list-element arm, which no longer invents a refusal. The not-a-literal refusal reads ``Expected sql`...`; got an identifier``. `dataTypeValue` throws an `InternalError` for a registered type nothing writes. `taggedLiteralTextReadsBack` is now `printedTaggedLiteralReadsBack`. New tests: the round trip of the offered rewrite through the PSL parser, a narrow list cast that reaches the range rule, the value type on each assembled stack, and one message for the same refusal as `@default` and as an argument. B07 accepted as is. Logs in `wip/2t-wording-fixes/`.
+
+Round two (`slice-reviews/2t-wording-round-2/code-review.md`) confirmed every finding fixed and raised four small ones (H01 to H04), fixed the same day: ADR 231 names the "receiving type takes it" condition and the no-written-form internal error; the `dataTypeValue` label uses `tagForm`; `printedTaggedLiteralReadsBack` is no longer exported; the extension fragment lists `WrittenForm`, `RefusalGuidance` and `tagForm`. The deferred items in that review (codec check of a rewrite, newlines in a multi-line rewrite, one tag per type) are accepted costs. `main` (`45c3b5b076`) was merged in the same day.
+
+## Slice 2b review, round 3, 2026-10-07
+
+hammurabi-31 took over from marconi-29. Brief: `dispatches/2b-round-3-review-brief.md`. Reviews: `slice-reviews/2b-round-3/` (C01 to C08, D01 to D09). Code fixes brief: `dispatches/2b-round-3-fixes-brief.md`.
+
+- `main` merged again (`7fa9184840`); no conflicts, no released fragment touched. The ADR moved from 267 to 268 (`20f0af8117`), because #30641 claims 267.
+- No merge dropped behaviour. The findings were text the merges left behind, two untested paths, one test that could not fail, and one file outside the slice.
+- **Code and tests** (implementer): block value completion and block keyword snippets are tested to receive the source's data types, and `using = |` in a `policy_select` block offers `sql` on the real Postgres stack (D03, C04); the block spec factory test is named for what it checks and asserts the data types by identity (D04); the Postgres tests build block spec contexts with `blockSpecContext` (D05); the codemod's unclosed-backtick test fails without its fix (D06); the print refusal says "blank lines at the start or end" (C05). Every new test was shown to fail with its defect planted; logs in `wip/2b-round-3-fixes/`.
+- **Docs** (orchestrator): ADR 268 no longer says a line comment renames anything or that the line-comment rule is unbuilt (C01, D01); ADR 129 and the ADR index say only exact-named objects are skipped (C07, D01); the extension fragment's `BlockSpecContext` is `{ symbols, dataTypes }`, its stale supersede sentence is gone and its change id is `block-spec-context-carries-data-types` (C02, C03, D02); the error reference (C05); the editor tooling brief says a policy's `using` completes `sql` (C04, D03); the Supabase skill reference states the escapes (D08); the spec and the manual QA table quote the current messages (C06, D09); the Data Contract subsystem doc's tagged-literal section matches ADR 129; this file.
+- **Fixes check:** both reviewers confirmed every finding fixed and added one, D10: the test that a policy's `using` completes `sql` on the real Postgres stack loaded Postgres's source from the language server's tests. It moved to `test/integration/test/authoring/lsp-sql-completion-in-blocks.integration.test.ts`, which drives the language server over its protocol in a Postgres project.
+- **Line comments in the journey:** the plan gave slice 1 the job of adding a `--` case to `sql-expression-literals.e2e.test.ts`, but slice 1 merged before that file existed. The journey's partial index, CHECK and `withCheck` texts now end in a `--` comment, and the journey passes. A run with `renderOpaqueSql` broken was not done (the permission check refused editing production code for it); slice 1's unit and PGlite tests cover that function.
+- **Not changed:** the Bash hook in `.claude/scripts/enforce-tools.mjs` (C08, D07). Will asked for it, round 1 (F08) kept it in this pull request, and the description names it as unrelated.
+
 ## Slice 4, 2026-10-01
 
 Built in the linked worktree `wip/wt-1`, stacked on slice 1. Briefs: `dispatches/4-implementer-brief.md`, `4-review-fixes-brief.md`, `4-round-2-fixes-brief.md`. Reviews: `slice-reviews/4/` and `4-round-2/`. Round 1 found three column-default render sites the design missed (`setDefault`, SQLite `addColumn` and `recreateTable`); round 2 made every hand-listed renderer typed over its input's keys. PR https://github.com/prisma/orm/pull/30554.
@@ -324,12 +347,12 @@ Built in the linked worktree `wip/wt-1`, stacked on slice 1. Briefs: `dispatches
 | Order | Plan slice | Ticket | State |
 | --- | --- | --- | --- |
 | 1 | 2a: `sql` is the data type `sql/expression` | TML-3296 | Merged 2026-09-30 (#30534) |
-| 2 | 2t: an argument declares the data type it receives | TML-3367 | PR #30539 open against the 2a branch; two review rounds done, all findings fixed |
-| 3 | 2b: the six places take `sql` literals | TML-3288 | PR #30550 open against the 2t branch (2026-09-30); two review rounds done, all findings fixed; retarget to `main` when #30539 merges |
-| 4 | 3: the TypeScript builder takes `sql` values | TML-3289 | Built on `tml-3289-sql-expression-ts` (2026-10-01); review next |
-| On the side | 1: line comments in raw SQL | TML-3287 | PR #30546 open against `main` (2026-09-30); two review rounds done, all findings fixed; awaits Will's approval |
-| Last | 4: migration files write template literals | TML-3290 | PR #30554 open against the slice 1 branch (2026-10-01); two review rounds done, all findings fixed; retarget to `main` when #30546 merges |
-| Stretch | 5: migration files write `sql` values | TML-3297 | Waiting for 3 and 4 |
+| 2 | 2t: an argument declares the data type it receives | TML-3367 | Merged 2026-10-07 (#30539), shipped in rc.16 |
+| 3 | 2b: the six places take `sql` literals | TML-3288 | #30550 open against `main`; three review rounds done, all findings fixed |
+| 4 | 3: the TypeScript builder takes `sql` values | TML-3289 | #30558 open against the 2b branch; waits for 2b |
+| On the side | 1: line comments in raw SQL | TML-3287 | Merged (#30546) |
+| Last | 4: migration files write template literals | TML-3290 | Merged (#30554) |
+| Stretch | 5: migration files write `sql` values | TML-3297 | Not started; ask Will |
 
 TML-3282 was the decision ticket and is done.
 

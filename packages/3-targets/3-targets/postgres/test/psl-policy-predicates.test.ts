@@ -1,4 +1,3 @@
-import { emptyCodecLookup } from '@internal/framework-components/codec';
 import { assembleAuthoringContributions } from '@internal/framework-components/control';
 import { withSeedDiagnostics } from '@internal/psl-parser/interpret';
 import { bindPslSchema } from '@internal/psl-parser/test';
@@ -14,11 +13,13 @@ import {
   postgresAuthoringModelAttributes,
   postgresAuthoringPslBlockDescriptors,
 } from '../src/core/authoring';
+import { createPostgresBuiltinCodecLookup } from '../src/core/codec-registry';
 import type { PostgresRlsPolicy } from '../src/core/postgres-rls-policy';
 import { type PostgresSchema, postgresCreateNamespace } from '../src/core/postgres-schema';
 import { postgresDataTypeSupport } from './fixtures/postgres-data-type-support';
 
 const SOURCE_ID = 'psl-policy-predicates.test.psl';
+const postgresCodecLookup = createPostgresBuiltinCodecLookup();
 
 const assembled = assembleAuthoringContributions([
   {
@@ -39,13 +40,13 @@ function interpret(source: string) {
       authoringContributions: {
         ...assembled,
         type: {
-          Int: { kind: 'typeConstructor', output: { codecId: 'pg/int4@1', nativeType: 'int4' } },
+          Int: { kind: 'typeConstructor', output: { codecId: 'pg/int4@1' } },
           ...assembled.type,
         },
         attributeSpecs: sqlAttributeSpecs,
       },
       pslDiagnostics: { describeUnsupportedAttribute: describeUnsupportedSqlAttribute },
-      codecLookup: { ...emptyCodecLookup, descriptorFor: () => undefined },
+      codecLookup: postgresCodecLookup,
       controlMutationDefaults: { defaultFunctionRegistry: new Map(), generatorDescriptors: [] },
       dataTypes: postgresDataTypeSupport,
       resolvedInputs: [],
@@ -151,26 +152,10 @@ describe('policy predicates', () => {
   });
 
   it.each([
-    [
-      '"owner_id = 1"',
-      'PSL_VALUE_TYPE_INCOMPATIBLE',
-      'sql/expression has no cast from pg/text; write it as sql`owner_id = 1`',
-    ],
-    [
-      "'x'",
-      'PSL_VALUE_TYPE_INCOMPATIBLE',
-      'sql/expression has no cast from pg/text; write it as sql`x`',
-    ],
-    [
-      '42',
-      'PSL_VALUE_TYPE_INCOMPATIBLE',
-      'sql/expression has no cast from pg/int2; write sql`...`',
-    ],
-    [
-      'true',
-      'PSL_VALUE_TYPE_INCOMPATIBLE',
-      'sql/expression has no cast from pg/bool; write sql`...`',
-    ],
+    ['"owner_id = 1"', 'PSL_VALUE_TYPE_INCOMPATIBLE', 'Expected sql`...`; write sql`owner_id = 1`'],
+    ["'x'", 'PSL_VALUE_TYPE_INCOMPATIBLE', 'Expected sql`...`; write sql`x`'],
+    ['42', 'PSL_VALUE_TYPE_INCOMPATIBLE', 'Expected sql`...`'],
+    ['true', 'PSL_VALUE_TYPE_INCOMPATIBLE', 'Expected sql`...`'],
     [
       'pg.sql`x`',
       'PSL_UNKNOWN_LITERAL_TAG',

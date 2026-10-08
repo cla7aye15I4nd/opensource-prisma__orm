@@ -69,10 +69,14 @@ import {
 } from './codec-ids';
 import { postgresError } from './errors';
 import {
-  isFullTextIndexableCodec,
-  renderFullTextIndexExpression,
-} from './full-text-index-expression';
+  describeFullTextIndexProblem,
+  FULL_TEXT_INDEX_TYPE,
+  type FullTextIndexProblem,
+  fullTextIndexProblems,
+} from './full-text-index-definition';
+import { type FullTextFieldsInput, weightGroupsOf } from './full-text-weight-groups';
 import { postgresNowGeneratorIds } from './now-generators';
+import { postgresCodecTraitsOf } from './postgres-codec-traits';
 import { PostgresNativeEnum } from './postgres-native-enum';
 import { PostgresRlsEnablement, type PostgresRlsEnablementInput } from './postgres-rls-enablement';
 import { PostgresRlsPolicy, type RlsPolicyOperation } from './postgres-rls-policy';
@@ -96,7 +100,12 @@ import {
 // `sql-attribute-specs.ts` convention) is the settled spelling for pack
 // codes; inline string literals bypass it.
 const PSL_POLICY_INVALID_MAP: ContributedPslDiagnosticCode = 'PSL_POLICY_INVALID_MAP';
-const PSL_FULL_TEXT_INDEX_ONE_FIELD: ContributedPslDiagnosticCode = 'PSL_FULL_TEXT_INDEX_ONE_FIELD';
+const PSL_FULL_TEXT_INDEX_TOO_MANY_GROUPS: ContributedPslDiagnosticCode =
+  'PSL_FULL_TEXT_INDEX_TOO_MANY_GROUPS';
+const PSL_FULL_TEXT_INDEX_EMPTY_GROUP: ContributedPslDiagnosticCode =
+  'PSL_FULL_TEXT_INDEX_EMPTY_GROUP';
+const PSL_FULL_TEXT_INDEX_DUPLICATE_FIELD: ContributedPslDiagnosticCode =
+  'PSL_FULL_TEXT_INDEX_DUPLICATE_FIELD';
 const PSL_FULL_TEXT_INDEX_REQUIRES_NAME: ContributedPslDiagnosticCode =
   'PSL_FULL_TEXT_INDEX_REQUIRES_NAME';
 const PSL_FULL_TEXT_INDEX_NAME_XOR_MAP: ContributedPslDiagnosticCode =
@@ -116,7 +125,8 @@ const PSL_ROLE_BLOCK_OUTSIDE_UNBOUND_NAMESPACE: ContributedPslDiagnosticCode =
  * literal value. The interpreter resolves the ref to the `native_enum`
  * entity generically (driven by `entityRefArg`); the `pg/enum@1` codec
  * descriptor's `columnFromEntity` hook (see `codecs.ts`) converts that
- * entity into the column's `typeParams` and native type.
+ * entity into the column's `typeParams`. The column's type name comes from the
+ * `pg/enum` data type, which renders `typeParams.typeName`.
  */
 export const postgresAuthoringTypes = {
   BigIntNumber: {
@@ -125,7 +135,6 @@ export const postgresAuthoringTypes = {
       'A PostgreSQL 64-bit integer represented as a JavaScript number within its safe integer range.',
     output: {
       codecId: 'pg/int8number@1',
-      nativeType: 'int8',
     },
   },
   UnboundedInt: {
@@ -134,12 +143,12 @@ export const postgresAuthoringTypes = {
       'An arbitrary-precision integer stored as PostgreSQL numeric and represented as bigint.',
     output: {
       codecId: 'pg/unboundedint@1',
-      nativeType: 'numeric',
     },
   },
   pg: {
     enum: {
       kind: 'typeConstructor',
+      inferred: true,
       entityRefArg: { index: 0, entityKind: 'native_enum' },
       output: {
         codecId: PG_ENUM_CODEC_ID,
@@ -621,15 +630,24 @@ const postgresRlsSpecFactory: ModelAttributeSpecFactory = () => postgresRlsSpec;
 
 const [firstLanguage, ...remainingLanguages] = POSTGRES_TEXT_SEARCH_LANGUAGES;
 
+const fullTextField = fieldRef();
+
 function postgresFullTextIndexSpec(ctx: AttributeSpecContext) {
   return modelAttribute('fullTextIndex', {
     documentation:
-      'Indexes one text column for full-text search, rendering the expression `fullTextMatches`, `fullTextRank` and `fullTextHeadline` lower to.',
+      "Indexes text fields for full-text search. Each item of the list is a weight group, strongest first; a nested list puts several fields in one group. Pass the index from the table's `indexes` to `fullTextMatches` and `fullTextRank` to search the same document.",
     positional: [
       {
         key: 'fields',
-        type: list(fieldRef(), { allowEmpty: false, unique: true }),
-        documentation: 'The single field to index.',
+        type: oneOf(
+          fullTextField,
+          list(oneOf(fullTextField, list(fullTextField)), {
+            allowEmpty: false,
+            label: '(field name | field name[])[]',
+          }),
+        ),
+        documentation:
+          'The fields to index: one field, or a list of fields and lists of fields. Each top-level item is a weight group, from A down to D.',
       },
     ],
     named: {
@@ -654,23 +672,25 @@ function postgresFullTextIndexSpec(ctx: AttributeSpecContext) {
       },
     },
     refine: (value, ctx, attributeNode) => {
-      const diagnostics = [];
-      if (value.fields.length !== 1) {
-        diagnostics.push(
+      const problems = fullTextIndexProblems({
+        weightGroups: weightGroupsOf(value.fields, isFieldName),
+      });
+      const diagnostics = problems
+        .filter(isPslFullTextIndexProblem)
+        .map((problem) =>
           leafDiagnostic(
             ctx,
             attributeNode,
-            'The full-text operations work on one column; declare one `@@fullTextIndex` per column',
-            PSL_FULL_TEXT_INDEX_ONE_FIELD,
+            describeFullTextIndexProblem('`@@fullTextIndex`', problem),
+            FULL_TEXT_INDEX_PROBLEM_CODES[problem.kind],
           ),
         );
-      }
       if (value.name === undefined && value.map === undefined) {
         diagnostics.push(
           leafDiagnostic(
             ctx,
             attributeNode,
-            '`@@fullTextIndex` requires a `name` or `map` argument (a default name cannot be derived from an expression)',
+            '`@@fullTextIndex` requires a `name` or `map` argument',
             PSL_FULL_TEXT_INDEX_REQUIRES_NAME,
           ),
         );
@@ -690,11 +710,40 @@ function postgresFullTextIndexSpec(ctx: AttributeSpecContext) {
   });
 }
 
+function isFieldName(value: unknown): value is string {
+  return typeof value === 'string';
+}
+
+/**
+ * `@@fullTextIndex` has no `unique` argument, so it never writes a unique index, and its spec
+ * refuses an empty field list before these rules run.
+ */
+type PslFullTextIndexProblem = Exclude<
+  FullTextIndexProblem,
+  { readonly kind: 'unique' | 'no-fields' }
+>;
+
+function isPslFullTextIndexProblem(
+  problem: FullTextIndexProblem,
+): problem is PslFullTextIndexProblem {
+  return problem.kind !== 'unique' && problem.kind !== 'no-fields';
+}
+
+const FULL_TEXT_INDEX_PROBLEM_CODES: Record<
+  PslFullTextIndexProblem['kind'],
+  ContributedPslDiagnosticCode
+> = {
+  'too-many-groups': PSL_FULL_TEXT_INDEX_TOO_MANY_GROUPS,
+  'empty-group': PSL_FULL_TEXT_INDEX_EMPTY_GROUP,
+  'duplicate-field': PSL_FULL_TEXT_INDEX_DUPLICATE_FIELD,
+  'not-text': PSL_FULL_TEXT_INDEX_TEXT_FIELD,
+};
+
 const postgresFullTextIndexSpecFactory: ModelAttributeSpecFactory = (ctx) =>
   postgresFullTextIndexSpec(ctx);
 
 type PostgresFullTextIndexParsed = {
-  readonly fields: readonly string[];
+  readonly fields: FullTextFieldsInput<string>;
   readonly language?: FullTextSearchLanguage;
   readonly name?: string;
   readonly map?: string;
@@ -729,31 +778,43 @@ export const postgresAuthoringModelAttributes = {
     spec: postgresFullTextIndexSpecFactory,
     repeatable: true,
     lower: (parsed: PostgresFullTextIndexParsed, ctx: AuthoringModelAttributeContext) => {
-      const fieldName = parsed.fields[0];
-      invariant(
-        fieldName !== undefined && parsed.fields.length === 1,
-        `@@fullTextIndex on "${ctx.modelName}" lowered with ${parsed.fields.length} fields`,
-      );
-      const columnName = ctx.fieldStorageName(fieldName);
-      const codecId = ctx.fieldCodecId(fieldName);
-      // A relation field parses as a field reference but stores no value, so it
-      // reaches here with neither a column nor a codec.
-      if (columnName === undefined || codecId === undefined || !isFullTextIndexableCodec(codecId)) {
+      const fieldGroups = weightGroupsOf(parsed.fields, isFieldName);
+      const problems = fullTextIndexProblems({
+        weightGroups: fieldGroups,
+        codecs: {
+          // A relation field parses as a field reference but stores no value, so it has no column.
+          codecIdOf: (fieldName) =>
+            ctx.fieldStorageName(fieldName) === undefined ? undefined : ctx.fieldCodecId(fieldName),
+          traitsOf: postgresCodecTraitsOf,
+        },
+      }).filter(isPslFullTextIndexProblem);
+      for (const problem of problems) {
         ctx.diagnostics?.push({
-          code: PSL_FULL_TEXT_INDEX_TEXT_FIELD,
-          message: `\`@@fullTextIndex\` indexes a text column, but "${ctx.modelName}.${fieldName}" is ${codecId === undefined ? 'not a stored scalar field' : `stored as \`${codecId}\``}.`,
+          code: FULL_TEXT_INDEX_PROBLEM_CODES[problem.kind],
+          message: describeFullTextIndexProblem(
+            '`@@fullTextIndex`',
+            problem,
+            (fieldName) => `${ctx.modelName}.${fieldName}`,
+          ),
           sourceId: ctx.sourceId ?? 'unknown',
         });
-        return undefined;
       }
+      if (problems.length > 0) return undefined;
+      const weightGroups = fieldGroups.map((group) =>
+        group.map((fieldName) => {
+          const columnName = ctx.fieldStorageName(fieldName);
+          assertDefined(columnName, `@@fullTextIndex field "${fieldName}" has no storage column`);
+          return columnName;
+        }),
+      );
       return {
         index: {
-          expression: renderFullTextIndexExpression(
-            parsed.language ?? DEFAULT_FULL_TEXT_SEARCH_LANGUAGE,
-            columnName,
-          ),
-          type: 'gin',
-          options: undefined,
+          columns: weightGroups.flat(),
+          type: FULL_TEXT_INDEX_TYPE,
+          options: {
+            weightGroups,
+            language: parsed.language ?? DEFAULT_FULL_TEXT_SEARCH_LANGUAGE,
+          },
           where: parsed.where === undefined ? undefined : sqlTextFromCanonical(parsed.where.value),
           unique: undefined,
           name: parsed.name,
@@ -769,109 +830,91 @@ export const postgresAuthoringFieldPresets = {
     kind: 'fieldPreset',
     output: {
       codecId: 'pg/text@1',
-      nativeType: 'text',
     },
   },
   int: {
     kind: 'fieldPreset',
     output: {
       codecId: 'pg/int4@1',
-      nativeType: 'int4',
     },
   },
   bigint: {
     kind: 'fieldPreset',
     output: {
       codecId: 'pg/int8@1',
-      nativeType: 'int8',
     },
   },
   float: {
     kind: 'fieldPreset',
     output: {
       codecId: 'pg/float8@1',
-      nativeType: 'float8',
     },
   },
   decimal: {
     kind: 'fieldPreset',
     output: {
       codecId: 'pg/numeric@1',
-      nativeType: 'numeric',
     },
   },
   boolean: {
     kind: 'fieldPreset',
     output: {
       codecId: 'pg/bool@1',
-      nativeType: 'bool',
     },
   },
   json: {
     kind: 'fieldPreset',
     output: {
       codecId: 'pg/jsonb@1',
-      nativeType: 'jsonb',
     },
   },
   bytes: {
     kind: 'fieldPreset',
     output: {
       codecId: 'pg/bytea@1',
-      nativeType: 'bytea',
     },
   },
   dateTime: {
     kind: 'fieldPreset',
     output: {
       codecId: 'pg/timestamptz-temporal@1',
-      nativeType: 'timestamptz',
     },
   },
   temporal: {
     createdAtJsDate: /* @__PURE__ */ temporalAuthoringPresets({
       codecId: PG_TIMESTAMPTZ_DATE_CODEC_ID,
-      nativeType: 'timestamptz',
       generatorId: postgresNowGeneratorIds[PG_TIMESTAMPTZ_DATE_CODEC_ID],
     }).createdAt,
     updatedAtJsDate: /* @__PURE__ */ temporalAuthoringPresets({
       codecId: PG_TIMESTAMPTZ_DATE_CODEC_ID,
-      nativeType: 'timestamptz',
       generatorId: postgresNowGeneratorIds[PG_TIMESTAMPTZ_DATE_CODEC_ID],
     }).updatedAt,
     timestamptzJsDate: /* @__PURE__ */ temporalCodecPresetWithPrecision({
       codecId: PG_TIMESTAMPTZ_DATE_CODEC_ID,
-      nativeType: 'timestamptz',
       generatorId: postgresNowGeneratorIds[PG_TIMESTAMPTZ_DATE_CODEC_ID],
     }),
     .../* @__PURE__ */ temporalAuthoringPresets({
       codecId: PG_TIMESTAMPTZ_TEMPORAL_CODEC_ID,
-      nativeType: 'timestamptz',
       generatorId: postgresNowGeneratorIds[PG_TIMESTAMPTZ_TEMPORAL_CODEC_ID],
     }),
     .../* @__PURE__ */ temporalStringAuthoringPresets({
       codecId: PG_TIMESTAMPTZ_STRING_CODEC_ID,
-      nativeType: 'timestamptz',
       generatorId: postgresNowGeneratorIds[PG_TIMESTAMPTZ_STRING_CODEC_ID],
     }),
     timestamp: /* @__PURE__ */ temporalCodecPresetWithPrecision({
       codecId: PG_TIMESTAMP_TEMPORAL_CODEC_ID,
-      nativeType: 'timestamp',
       generatorId: postgresNowGeneratorIds[PG_TIMESTAMP_TEMPORAL_CODEC_ID],
     }),
     timestamptz: /* @__PURE__ */ temporalCodecPresetWithPrecision({
       codecId: PG_TIMESTAMPTZ_TEMPORAL_CODEC_ID,
-      nativeType: 'timestamptz',
       generatorId: postgresNowGeneratorIds[PG_TIMESTAMPTZ_TEMPORAL_CODEC_ID],
     }),
     timestampString: /* @__PURE__ */ temporalCodecPresetWithPrecision({
       codecId: PG_TIMESTAMP_STRING_CODEC_ID,
-      nativeType: 'timestamp',
       generatorId: postgresNowGeneratorIds[PG_TIMESTAMP_STRING_CODEC_ID],
     }),
     timestamptzString: /* @__PURE__ */ temporalCodecPresetWithPrecision({
       codecId: PG_TIMESTAMPTZ_STRING_CODEC_ID,
-      nativeType: 'timestamptz',
       generatorId: postgresNowGeneratorIds[PG_TIMESTAMPTZ_STRING_CODEC_ID],
     }),
   },
@@ -879,7 +922,6 @@ export const postgresAuthoringFieldPresets = {
     kind: 'fieldPreset',
     output: {
       codecId: 'pg/uuid@1',
-      nativeType: 'uuid',
     },
   },
   id: {
@@ -887,7 +929,6 @@ export const postgresAuthoringFieldPresets = {
       kind: 'fieldPreset',
       output: {
         codecId: 'pg/uuid@1',
-        nativeType: 'uuid',
         executionDefaults: {
           onCreate: {
             kind: 'generator',
@@ -901,7 +942,6 @@ export const postgresAuthoringFieldPresets = {
       kind: 'fieldPreset',
       output: {
         codecId: 'pg/uuid@1',
-        nativeType: 'uuid',
         executionDefaults: {
           onCreate: {
             kind: 'generator',

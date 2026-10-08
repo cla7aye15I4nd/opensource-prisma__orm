@@ -13,8 +13,8 @@ import {
   sql,
 } from '../../src/exports/contract-builder';
 
-const intColumn = { codecId: 'pg/int4@1', nativeType: 'int4' } as const;
-const textColumn = { codecId: 'pg/text@1', nativeType: 'text' } as const;
+const intColumn = { codecId: 'pg/int4@1' } as const;
+const textColumn = { codecId: 'pg/text@1' } as const;
 
 const fields = { id: field.column(intColumn).id(), text: field.column(textColumn) };
 

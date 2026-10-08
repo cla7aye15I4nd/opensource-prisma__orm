@@ -16,6 +16,7 @@ import {
 } from '@internal/framework-components/control';
 import {
   type AttributeSpecNamespace,
+  type BlockSpecContext,
   blockAttribute,
   buildSymbolTable,
   entityRef,
@@ -474,7 +475,7 @@ namespace other { model Hidden { id Int } }`,
                 Value: {
                   kind: 'typeConstructor',
                   documentation: 'Custom value',
-                  output: { codecId: 'value', nativeType: 'value' },
+                  output: { codecId: 'value' },
                 },
               },
             },
@@ -527,17 +528,17 @@ namespace other { model Hidden { id Int } }`,
       const types: AuthoringTypeNamespace = {
         Scalar: {
           kind: 'typeConstructor',
-          output: { codecId: 'fixture/value', nativeType: 'value' },
+          output: { codecId: 'fixture/value' },
         },
         Deprecated: {
           kind: 'typeConstructor',
           deprecated: { replacement: 'Scalar' },
-          output: { codecId: 'fixture/value', nativeType: 'value' },
+          output: { codecId: 'fixture/value' },
         },
         Empty: {
           kind: 'typeConstructor',
           args: [],
-          output: { codecId: 'fixture/value', nativeType: 'value' },
+          output: { codecId: 'fixture/value' },
         },
         Required: {
           kind: 'typeConstructor',
@@ -546,12 +547,12 @@ namespace other { model Hidden { id Int } }`,
             { name: 'label', kind: 'string' },
             { name: 'scale', kind: 'number', optional: true },
           ],
-          output: { codecId: 'fixture/value', nativeType: 'value' },
+          output: { codecId: 'fixture/value' },
         },
         Optional: {
           kind: 'typeConstructor',
           args: [{ name: 'size', kind: 'number', optional: true }],
-          output: { codecId: 'fixture/value', nativeType: 'value' },
+          output: { codecId: 'fixture/value' },
         },
         Entity: {
           kind: 'typeConstructor',
@@ -1414,8 +1415,9 @@ namespace app {
     expect(items.map((item) => item.label)).toEqual(['on', 'where', 'mode', 'using']);
   });
 
-  it('calls the spec factory with the symbol table only and never invokes rule parsing', () => {
-    const factoryContexts: unknown[] = [];
+  it('calls the spec factory with the spec context and never invokes rule parsing', () => {
+    const dataTypes: DataTypeSupport = { entries: {}, lookup: createDataTypeLookup([]) };
+    const factoryContexts: BlockSpecContext[] = [];
     const throwingRule = {
       kind: 'str' as const,
       label: 'string',
@@ -1432,7 +1434,7 @@ namespace app {
           keyword: 'guard',
           discriminator: 'fixture-guard',
           name: { required: true },
-          spec: (ctx: unknown) => {
+          spec: (ctx: BlockSpecContext) => {
             factoryContexts.push(ctx);
             return structBlock({
               parameters: {
@@ -1442,6 +1444,7 @@ namespace app {
           },
         },
       },
+      dataTypes,
     });
 
     expect(items.map((item) => item.label)).toEqual(['shield']);
@@ -1449,6 +1452,7 @@ namespace app {
     expect(factoryContexts).toHaveLength(2);
     for (const ctx of factoryContexts) {
       expect(ctx).toEqual({ symbols: expect.any(Object), dataTypes: expect.any(Object) });
+      expect(ctx.dataTypes).toBe(dataTypes);
     }
   });
 
@@ -1499,7 +1503,7 @@ namespace app {
               String: {
                 kind: 'typeConstructor',
                 documentation: 'Variable-length Unicode text.',
-                output: { codecId: 'fixture/text@1', nativeType: 'text' },
+                output: { codecId: 'fixture/text@1' },
               },
             },
           },
@@ -1523,7 +1527,7 @@ namespace app {
             field: {
               stamp: {
                 kind: 'fieldPreset',
-                output: { codecId: 'fixture/timestamp@1', nativeType: 'timestamp' },
+                output: { codecId: 'fixture/timestamp@1' },
               },
             },
           },
@@ -1745,11 +1749,11 @@ namespace app {
     ).toEqual(['NoAction', 'Restrict', 'Cascade', 'SetNull', 'SetDefault']);
   }, 5_000);
 
-  it('uses actual Mongo field-named functions and keeps distinct snippet edits', async () => {
+  it('uses actual Mongo sort functions and completes their positional arguments', async () => {
     const stack = await actualMongoStack();
     const schema = (args: string) => `model Post { title String\n slug String\n @@index(${args}) }`;
     const plain = completeWithActualStack(schema('[|]'), stack).items;
-    expect(plain.map((item) => item.label)).toEqual(['title', 'slug', 'wildcard']);
+    expect(plain.map((item) => item.label)).toEqual(['title', 'slug', 'wildcard', 'sort']);
     const snippets = completeWithActualStack(schema('[|]'), stack, {
       clientSupportsSnippets: true,
     }).items;
@@ -1757,14 +1761,13 @@ namespace app {
       ['title', 'title'],
       ['slug', 'slug'],
       ['wildcard', `wildcard(${emptySnippetPlaceholder1})`],
-      ['title', 'title(sort: $' + '{1:sort})'],
-      ['slug', 'slug(sort: $' + '{1:sort})'],
+      ['sort', 'sort($' + '{1:field}, $' + '{2:direction})'],
     ]);
     expect(
-      completeWithActualStack(schema('[title(|)]'), stack).items.map((item) => item.label),
-    ).toEqual(['sort']);
+      completeWithActualStack(schema('[sort(|)]'), stack).items.map((item) => item.label),
+    ).toEqual(['title', 'slug']);
     expect(
-      completeWithActualStack(schema('[title(sort: |)]'), stack).items.map((item) => item.label),
+      completeWithActualStack(schema('[sort(title, |)]'), stack).items.map((item) => item.label),
     ).toEqual(['Asc', 'Desc']);
     expect(completeWithActualStack(schema('[wildcard(|)]'), stack).items).toEqual([]);
     expect(
@@ -1772,7 +1775,7 @@ namespace app {
     ).toEqual(['1', '-1', '"text"', '"2dsphere"', '"2d"', '"hashed"']);
   }, 5_000);
 
-  it('scopes actual Mongo dynamic function names to the declaring namespace model', async () => {
+  it('scopes actual Mongo sort fields to the declaring namespace model', async () => {
     const stack = await actualMongoStack();
     const schema =
       'model Post { topOnly String }\nnamespace scoped { model Post { scopedOnly String\n @@index([|]) } }';
@@ -1784,8 +1787,13 @@ namespace app {
     ).toEqual([
       ['scopedOnly', 'scopedOnly'],
       ['wildcard', `wildcard(${emptySnippetPlaceholder1})`],
-      ['scopedOnly', 'scopedOnly(sort: $' + '{1:sort})'],
+      ['sort', 'sort($' + '{1:field}, $' + '{2:direction})'],
     ]);
+    expect(
+      completeWithActualStack(schema.replace('[|]', '[sort(|)]'), stack).items.map(
+        (item) => item.label,
+      ),
+    ).toEqual(['scopedOnly']);
   }, 5_000);
 
   it('does not return generic block symbols as model field type candidates', () => {

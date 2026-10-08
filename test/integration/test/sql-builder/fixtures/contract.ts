@@ -55,6 +55,18 @@ const Comment = model('Comment', {
   ],
 }));
 
+const Document = model('Document', {
+  fields: {
+    id: field.column(int4Column).id(),
+    title: field.column(textColumn),
+    subtitle: field.column(textColumn).optional(),
+    body: field.column(textColumn).optional(),
+  },
+}).sql(({ cols }) => ({
+  table: 'documents',
+  indexes: [fullTextIndex([[cols.title, cols.subtitle], cols.body], { name: 'documents_search' })],
+}));
+
 const Profile = model('Profile', {
   fields: {
     id: field.column(int4Column).id(),
@@ -83,6 +95,7 @@ export const contract = defineContract({
     User,
     Post,
     Comment,
+    Document,
     Profile,
     Article,
   },

@@ -1,4 +1,5 @@
 export { type SqlExpression, sql } from '@internal/sql-contract/sql-expression';
+export { createComposedAuthoringHelpers } from '../composed-authoring-helpers';
 export type {
   ComposedAuthoringHelpers,
   ContractInput,
@@ -42,8 +43,10 @@ export type {
   ColumnRef,
   DeferredIndexColumn,
   DeferredIndexExpression,
+  DeferredIndexOptions,
   IndexConstraint,
   IndexExpressionInput,
+  IndexOptionsInput,
   TargetFieldRef,
 } from '../contract-dsl';
 export { buildContractDefinition } from '../contract-lowering';

@@ -16,7 +16,7 @@ import {
   requireSqlExpression,
   SqlExpression,
 } from '@internal/sql-contract/sql-expression';
-import type { StorageTypeInstance } from '@internal/sql-contract/types';
+import type { AuthoredStorageTypeInstance } from '@internal/sql-contract/types';
 import { blindCast } from '@internal/utils/casts';
 import { ifDefined } from '@internal/utils/defined';
 import { InternalError } from '@internal/utils/internal-error';
@@ -38,10 +38,10 @@ import {
   type ContractInput,
   type ContractModelBuilder,
   type DeferredIndexColumn,
-  type DeferredIndexExpression,
   type FieldStateOf,
   type ForeignKeyConstraint,
   type IdConstraint,
+  type IndexConstraint,
   type IndexExpressionInput,
   isCrossSpaceHandle,
   type ModelAttributesSpec,
@@ -82,15 +82,15 @@ type RuntimeModelSpec = {
 };
 
 type RuntimeCollection = {
-  readonly storageTypes: Record<string, StorageTypeInstance>;
+  readonly storageTypes: Record<string, AuthoredStorageTypeInstance>;
   readonly models: Record<string, RuntimeModel>;
   readonly modelSpecs: ReadonlyMap<string, RuntimeModelSpec>;
 };
 
 function buildStorageTypeReverseLookup(
-  storageTypes: Record<string, StorageTypeInstance>,
-): ReadonlyMap<StorageTypeInstance, string> {
-  const lookup = new Map<StorageTypeInstance, string>();
+  storageTypes: Record<string, AuthoredStorageTypeInstance>,
+): ReadonlyMap<AuthoredStorageTypeInstance, string> {
+  const lookup = new Map<AuthoredStorageTypeInstance, string>();
   for (const [key, instance] of Object.entries(storageTypes)) {
     lookup.set(instance, key);
   }
@@ -101,8 +101,8 @@ function resolveFieldDescriptor(
   modelName: string,
   fieldName: string,
   fieldState: FieldStateOf<ScalarFieldBuilder>,
-  storageTypes: Record<string, StorageTypeInstance>,
-  storageTypeReverseLookup: ReadonlyMap<StorageTypeInstance, string>,
+  storageTypes: Record<string, AuthoredStorageTypeInstance>,
+  storageTypeReverseLookup: ReadonlyMap<AuthoredStorageTypeInstance, string>,
 ): ColumnTypeDescriptor {
   if ('descriptor' in fieldState && fieldState.descriptor) {
     return fieldState.descriptor;
@@ -110,16 +110,13 @@ function resolveFieldDescriptor(
 
   if ('typeRef' in fieldState && fieldState.typeRef) {
     if (isEnumTypeHandle(fieldState.typeRef)) {
-      return {
-        codecId: fieldState.typeRef.codecId,
-        nativeType: fieldState.typeRef.nativeType,
-      };
+      return { codecId: fieldState.typeRef.codecId };
     }
 
     const typeRef =
       typeof fieldState.typeRef === 'string'
         ? fieldState.typeRef
-        : storageTypeReverseLookup.get(fieldState.typeRef as StorageTypeInstance);
+        : storageTypeReverseLookup.get(fieldState.typeRef as AuthoredStorageTypeInstance);
 
     if (!typeRef) {
       throw contractError(
@@ -138,11 +135,7 @@ function resolveFieldDescriptor(
       );
     }
 
-    return {
-      codecId: referencedType.codecId,
-      nativeType: referencedType.nativeType,
-      typeRef,
-    };
+    return { codecId: referencedType.codecId, typeRef };
   }
 
   throw contractError(
@@ -680,7 +673,7 @@ function lowerLocalForeignKeyNode(
     readonly onDelete?: ForeignKeyConstraint['onDelete'] | undefined;
     readonly onUpdate?: ForeignKeyConstraint['onUpdate'] | undefined;
     readonly constraint?: boolean | undefined;
-    readonly index?: boolean | undefined;
+    readonly index?: boolean | string | undefined;
   },
 ): ForeignKeyNode {
   return {
@@ -715,7 +708,7 @@ function lowerCrossSpaceForeignKeyNode(
     readonly onDelete?: ForeignKeyConstraint['onDelete'] | undefined;
     readonly onUpdate?: ForeignKeyConstraint['onUpdate'] | undefined;
     readonly constraint?: boolean | undefined;
-    readonly index?: boolean | undefined;
+    readonly index?: boolean | string | undefined;
   },
 ): ForeignKeyNode {
   if (foreignKey.targetTableName === undefined) {
@@ -832,10 +825,9 @@ function resolveForeignKeyNodes(
  */
 function resolveDeferredColumns(
   spec: Pick<RuntimeModelSpec, 'modelName' | 'fieldToColumn'>,
-  expression: DeferredIndexExpression,
+  fieldNames: readonly string[],
   fieldCodecIds: Readonly<Record<string, string>>,
 ): readonly DeferredIndexColumn[] {
-  const fieldNames = expression.fields.map((ref) => ref.fieldName);
   const columnNames = mapFieldNamesToColumnNames(spec.modelName, fieldNames, spec.fieldToColumn);
   return fieldNames.map((fieldName, position) => {
     const name = columnNames[position];
@@ -862,7 +854,13 @@ function indexExpressionText(
   if (isSqlExpression(expression)) return expression.text;
   if (typeof expression === 'object' && expression !== null && 'render' in expression) {
     return renderedSqlText(
-      expression.render(resolveDeferredColumns(spec, expression, fieldCodecIds)),
+      expression.render(
+        resolveDeferredColumns(
+          spec,
+          expression.fields.map((ref) => ref.fieldName),
+          fieldCodecIds,
+        ),
+      ),
       `${owner} expression`,
     );
   }
@@ -890,11 +888,21 @@ function constraintOwner(
   return name === undefined ? `${kind} on "${modelName}"` : `${kind} "${name}"`;
 }
 
+/** The fields an index covers, in order: its own, or those of its deferred expression. */
+function coveredFieldNames(index: IndexConstraint): readonly string[] {
+  if (index.fields !== undefined) return index.fields;
+  const { expression } = index;
+  if (expression === undefined || isSqlExpression(expression) || typeof expression !== 'object') {
+    return [];
+  }
+  return expression.fields.map((ref) => ref.fieldName);
+}
+
 function resolveModelNode(
   spec: RuntimeModelSpec,
   allSpecs: ReadonlyMap<string, RuntimeModelSpec>,
-  storageTypes: Record<string, StorageTypeInstance>,
-  storageTypeReverseLookup: ReadonlyMap<StorageTypeInstance, string>,
+  storageTypes: Record<string, AuthoredStorageTypeInstance>,
+  storageTypeReverseLookup: ReadonlyMap<AuthoredStorageTypeInstance, string>,
   extensions?: Record<string, ExtensionPackRef<'sql', string>>,
 ): ModelNode {
   const fields: FieldNode[] = [];
@@ -945,10 +953,14 @@ function resolveModelNode(
     // forbids options without a type, but a caller that suppresses the
     // compile error still reaches here, and dropping the orphaned options
     // would hide it from lowerAuthoredIndex's runtime backstop.
+    const options =
+      typeof index.options === 'function'
+        ? index.options(resolveDeferredColumns(spec, coveredFieldNames(index), fieldCodecIds))
+        : index.options;
     const method = blindCast<
       AuthoredIndexMethod,
       'the constraint type carries the union; reading the two fields separately loses the correlation'
-    >({ type: index.type, options: index.options });
+    >({ type: index.type, options });
     const owner = constraintOwner('Index', spec.modelName, index);
     const carried = {
       where:
@@ -1019,12 +1031,15 @@ function resolveModelNode(
  * `ContractInput`'s `Extensions` parameter defaults to `undefined`, but lowering
  * reads the extension-pack record at runtime, so the input is widened here.
  */
-type LoweringInput = Omit<ContractInput, 'extensions'> & {
+type LoweringInput = Omit<ContractInput, 'extensions' | 'codecLookup' | 'dataTypeLookup'> & {
   readonly extensions?: Record<string, ExtensionPackRef<'sql', string>> | undefined;
 };
 
 function collectRuntimeModelSpecs(definition: LoweringInput): RuntimeCollection {
-  const storageTypes = { ...(definition.types ?? {}) } as Record<string, StorageTypeInstance>;
+  const storageTypes = { ...(definition.types ?? {}) } as Record<
+    string,
+    AuthoredStorageTypeInstance
+  >;
   const models = { ...(definition.models ?? {}) } as Record<string, RuntimeModel>;
 
   emitTypedNamedTypeFallbackWarnings(models, storageTypes);

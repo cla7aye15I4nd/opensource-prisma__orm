@@ -1,6 +1,7 @@
 import type { SqlStorage } from '@internal/sql-contract/types';
 import { describe, expect, it } from 'vitest';
 import { createTestSqlNamespace } from '../../../1-core/contract/test/test-support';
+import { fixtureTypeLookups } from './fixture-codec-descriptors';
 import { fixtureDataTypeSupport } from './fixture-data-types';
 import {
   createBuiltinLikeControlMutationDefaults,
@@ -16,6 +17,7 @@ function interpret(schema: string) {
     composedExtensionContracts: new Map(),
     controlMutationDefaults: createBuiltinLikeControlMutationDefaults(),
     createNamespace: createTestSqlNamespace,
+    codecLookup: fixtureTypeLookups.codecLookup,
     dataTypes: fixtureDataTypeSupport,
     capabilities: { sql: { scalarList: true, checkConstraint: true } },
   });
@@ -85,19 +87,11 @@ describe.each(places)('$place', ({ attribute, read }) => {
     [
       '"(title IS NULL)"',
       'PSL_VALUE_TYPE_INCOMPATIBLE',
-      'sql/expression has no cast from pg/text; write it as sql`(title IS NULL)`',
+      'Expected sql`...`; write sql`(title IS NULL)`',
     ],
-    [
-      '42',
-      'PSL_VALUE_TYPE_INCOMPATIBLE',
-      'sql/expression has no cast from pg/int2; write sql`...`',
-    ],
-    [
-      'true',
-      'PSL_VALUE_TYPE_INCOMPATIBLE',
-      'sql/expression has no cast from pg/bool; write sql`...`',
-    ],
-    ['archived', 'PSL_INVALID_ATTRIBUTE_SYNTAX', 'Expected sql`...`, got an identifier'],
+    ['42', 'PSL_VALUE_TYPE_INCOMPATIBLE', 'Expected sql`...`'],
+    ['true', 'PSL_VALUE_TYPE_INCOMPATIBLE', 'Expected sql`...`'],
+    ['archived', 'PSL_INVALID_ATTRIBUTE_SYNTAX', 'Expected sql`...`; got an identifier'],
     [
       'pg.sql`x`',
       'PSL_UNKNOWN_LITERAL_TAG',

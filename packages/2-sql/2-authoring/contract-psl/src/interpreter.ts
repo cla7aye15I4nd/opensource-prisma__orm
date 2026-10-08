@@ -78,14 +78,15 @@ import {
   providesPslEntityPlacement,
   type ResolvedPslModelRefs,
 } from '@internal/sql-contract/entity-handle-lowering-hook';
+import { FOREIGN_KEY_INDEX_UNRESOLVED } from '@internal/sql-contract/foreign-key-materialization';
 import { isAuthoredIndexInput } from '@internal/sql-contract/index-naming';
 import { sqlTextFromCanonical } from '@internal/sql-contract/sql-expression';
 import {
+  type AuthoredStorageTypeInstance,
   resolvedTypeParams,
   type SqlModelStorage,
   type SqlNamespaceBase,
   type SqlNamespaceInput,
-  type StorageTypeInstance,
 } from '@internal/sql-contract/types';
 import { deriveValueSetFromEntity } from '@internal/sql-contract/value-set-derivation-hook';
 import {
@@ -109,7 +110,9 @@ import { blindCast } from '@internal/utils/casts';
 import { ifDefined } from '@internal/utils/defined';
 import { InternalError } from '@internal/utils/internal-error';
 import { notOk, ok, type Result } from '@internal/utils/result';
+import { isStructuredError } from '@internal/utils/structured-error';
 import { contractError } from './contract-errors';
+import { readWrittenNumberForCodec } from './data-type-default';
 import { defaultTableName } from './default-table-name';
 import {
   getAttribute,
@@ -176,7 +179,7 @@ export interface InterpretPslDocumentToSqlContractInput {
   readonly composedExtensionContracts: ReadonlyMap<string, Contract>;
   /** Target-supplied factory that materialises a `SqlNamespaceBase` concretion for each namespace coordinate. */
   readonly createNamespace: (input: SqlNamespaceInput) => SqlNamespaceBase;
-  readonly codecLookup?: CodecLookupWithDescriptors;
+  readonly codecLookup: CodecLookupWithDescriptors;
   readonly seedDiagnostics?: readonly ContractSourceDiagnostic[];
   /** The target's default codec ids for an `enum` block that omits `@@type`. */
   readonly enumInferenceCodecs?: { readonly text: string; readonly int: string };
@@ -564,10 +567,7 @@ function processEnumDeclarations(input: ProcessEnumDeclarationsInput): {
     if (handle === undefined || handle === null) continue;
 
     enumHandles.set(symbol, handle);
-    enumTypeDescriptors.set(symbol, {
-      codecId: handle.codecId,
-      nativeType: handle.nativeType,
-    });
+    enumTypeDescriptors.set(symbol, { codecId: handle.codecId });
   }
 
   return { enumHandles, enumTypeDescriptors };
@@ -608,7 +608,7 @@ interface BuildModelNodeInput {
     Readonly<Record<string, Readonly<Record<string, unknown>>>>
   >;
   /** Codec-id-keyed descriptor lookup — forwarded to `collectResolvedFields` for entity-ref type-constructor resolution (e.g. `pg.enum(Ref)`). */
-  readonly codecLookup?: CodecLookupWithDescriptors;
+  readonly codecLookup: CodecLookupWithDescriptors;
   /** Contributed model-attribute descriptors keyed by bare `@@` attribute name (the exact shape `buildModelAttributesByName` produces). */
   readonly modelAttributesByName: ReadonlyMap<string, AuthoringModelAttributeDescriptor>;
   readonly contributedModelAttributeSpecs: Readonly<Record<string, ModelAttributeSpecFactory>>;
@@ -617,8 +617,18 @@ interface BuildModelNodeInput {
   readonly parsedBlocks: ReadonlyMap<BlockSymbol, ParsedPslExtensionBlock>;
 }
 
+/** Where a relation names its foreign key's index, so a refusal of that name is reported at the relation. */
+interface RelationIndexLocation {
+  readonly namespaceId: string;
+  readonly tableName: string;
+  readonly columns: readonly string[];
+  readonly index: string;
+  readonly location: ReturnType<DiagnosticSource['at']>;
+}
+
 interface BuildModelNodeResult {
   readonly modelNode: ModelNode;
+  readonly relationIndexLocations: readonly RelationIndexLocation[];
   readonly fkRelationMetadata: FkRelationMetadata<ModelSymbol>[];
   readonly invalidFkPairings: InvalidModelFkPairing<ModelSymbol>[];
   readonly backrelationCandidates: ModelBackrelationCandidate<ModelSymbol>[];
@@ -714,7 +724,7 @@ function buildModelNodeFromPsl(input: BuildModelNodeInput): BuildModelNodeResult
     capabilities: input.capabilities,
     ...ifDefined('namespaceId', modelNamespaceId),
     ...ifDefined('namespaceExtensionEntities', namespaceExtensionEntitiesForModel),
-    ...ifDefined('codecLookup', input.codecLookup),
+    codecLookup: input.codecLookup,
   });
 
   const inlineIdFields = resolvedFields.filter((field) => field.isId);
@@ -1112,6 +1122,8 @@ function buildModelNodeFromPsl(input: BuildModelNodeInput): BuildModelNodeResult
       const lowered = lower(parsed, {
         family: input.familyId,
         target: input.targetId,
+        codecLookup: input.codecLookup,
+        dataTypeLookup: input.dataTypes.lookup,
         modelName: model.name,
         storageName: tableName,
         fieldStorageName: (fieldName) => {
@@ -1155,6 +1167,7 @@ function buildModelNodeFromPsl(input: BuildModelNodeInput): BuildModelNodeResult
   }
 
   const resultFkRelationMetadata: FkRelationMetadata<ModelSymbol>[] = [];
+  const relationIndexLocations: RelationIndexLocation[] = [];
   const resultInvalidFkPairings: InvalidModelFkPairing<ModelSymbol>[] = [];
   const resultCrossSpaceRelations: RelationNode[] = [];
   for (const relationAttribute of relationAttributes) {
@@ -1311,6 +1324,15 @@ function buildModelNodeFromPsl(input: BuildModelNodeInput): BuildModelNodeResult
         ...ifDefined('onUpdate', onUpdate),
         ...ifDefined('index', parsedRelation.index),
       });
+      if (typeof parsedRelation.index === 'string') {
+        relationIndexLocations.push({
+          namespaceId: modelNamespaceId ?? input.defaultNamespaceId,
+          tableName,
+          columns: localColumns,
+          index: parsedRelation.index,
+          location: source.at(relationAttribute.relation.span),
+        });
+      }
 
       // Build the cross-space RelationNode directly (no local back-relation candidate).
       // `buildSqlContractFromDefinition` recognises `spaceId` on a RelationNode and routes it
@@ -1454,6 +1476,15 @@ function buildModelNodeFromPsl(input: BuildModelNodeInput): BuildModelNodeResult
       ...ifDefined('onUpdate', onUpdate),
       ...ifDefined('index', parsedRelation.index),
     });
+    if (typeof parsedRelation.index === 'string') {
+      relationIndexLocations.push({
+        namespaceId: modelNamespaceId ?? input.defaultNamespaceId,
+        tableName,
+        columns: localColumns,
+        index: parsedRelation.index,
+        location: source.at(relationAttribute.relation.span),
+      });
+    }
 
     resultFkRelationMetadata.push({
       declaringModelName: model,
@@ -1505,6 +1536,7 @@ function buildModelNodeFromPsl(input: BuildModelNodeInput): BuildModelNodeResult
       ...ifDefined('control', controlPolicy),
     },
     fkRelationMetadata: resultFkRelationMetadata,
+    relationIndexLocations,
     invalidFkPairings: resultInvalidFkPairings,
     crossSpaceRelations: resultCrossSpaceRelations,
     backrelationCandidates: resultBackrelationCandidates,
@@ -1518,7 +1550,7 @@ interface BuildValueObjectNodesInput {
   readonly enumHandles: ReadonlyMap<BlockSymbol, EnumTypeHandle>;
   readonly namedTypeDescriptors: ReadonlyMap<NamedTypeSymbol, ColumnDescriptor>;
   /** The named types; a member typed by one takes its parameters inline. */
-  readonly namedTypes: Record<string, StorageTypeInstance>;
+  readonly namedTypes: Record<string, AuthoredStorageTypeInstance>;
   readonly diagnostics: PslDiagnosticCollector;
   readonly sources: PslSources;
   /** Composite types are placed in the default namespace, so their members resolve against it. */
@@ -1526,7 +1558,7 @@ interface BuildValueObjectNodesInput {
   readonly defaultNamespaceExtensionEntities:
     | Readonly<Record<string, Readonly<Record<string, unknown>>>>
     | undefined;
-  readonly codecLookup: CodecLookupWithDescriptors | undefined;
+  readonly codecLookup: CodecLookupWithDescriptors;
   readonly binder: Binder;
 }
 
@@ -1573,7 +1605,7 @@ function buildValueObjectNodes(input: BuildValueObjectNodesInput): ValueObjectNo
         entityLabel: `Field "${compositeType.name}.${field.name}"`,
         namespaceId: input.defaultNamespaceId,
         ...ifDefined('namespaceExtensionEntities', input.defaultNamespaceExtensionEntities),
-        ...ifDefined('codecLookup', input.codecLookup),
+        codecLookup: input.codecLookup,
       });
       if (!resolved.ok) {
         continue;
@@ -1901,9 +1933,6 @@ function materializeMtiVariantStorageLinks(
         ...ifDefined('namespaceId', baseNode.namespaceId),
       },
       constraint: true,
-      // The link columns are the variant's own primary key, which already
-      // carries a unique index — a separate FK backing index would be redundant.
-      index: false,
       // Deleting a base row must delete its variant extension row — classic
       // multi-table-inheritance semantics.
       onDelete: 'cascade',
@@ -2046,6 +2075,30 @@ function relationTargetKindLabel(resolution: Resolution): string | undefined {
     default:
       return undefined;
   }
+}
+
+/**
+ * The relation a refusal of `index: "<name>"` belongs to, and the message to report there; `undefined` for every other error.
+ */
+function relationIndexRefusal(
+  error: unknown,
+  locations: readonly RelationIndexLocation[],
+): { readonly at: RelationIndexLocation; readonly message: string } | undefined {
+  if (!isStructuredError(error) || error.meta?.['reason'] !== FOREIGN_KEY_INDEX_UNRESOLVED) {
+    return undefined;
+  }
+  const { namespaceId, tableName, columns, index } = error.meta ?? {};
+  const at = locations.find(
+    (candidate) =>
+      candidate.namespaceId === namespaceId &&
+      candidate.tableName === tableName &&
+      candidate.index === index &&
+      Array.isArray(columns) &&
+      candidate.columns.length === columns.length &&
+      candidate.columns.every((column, position) => column === columns[position]),
+  );
+  if (at === undefined) return undefined;
+  return { at, message: error.fix === undefined ? error.message : `${error.message} ${error.fix}` };
 }
 
 export function interpretPslDocumentToSqlContract(
@@ -2228,7 +2281,8 @@ export function interpretPslDocumentToSqlContract(
     entityContext: {
       family: input.target.familyId,
       target: input.target.targetId,
-      ...ifDefined('codecLookup', input.codecLookup),
+      codecLookup: input.codecLookup,
+      dataTypeLookup: input.dataTypes.lookup,
       sourceId: source.sources.sourceFileFor(source.node).filename,
       diagnostics: {
         push: (d) => {
@@ -2236,6 +2290,17 @@ export function interpretPslDocumentToSqlContract(
             blindCast<ContractSourceDiagnostic, 'sink diagnostics are span-compatible'>(d),
           );
         },
+      },
+      readWrittenNumber: ({ text, codecId, subject }) => {
+        if (input.codecLookup.descriptorFor(codecId) === undefined) return undefined;
+        const reading = readWrittenNumberForCodec({
+          text,
+          codecId,
+          codecLookup: input.codecLookup,
+          dataTypes: input.dataTypes,
+          subject,
+        });
+        return reading.ok ? reading : { ok: false, message: reading.message };
       },
       ...ifDefined('enumInferenceCodecs', input.enumInferenceCodecs),
     },
@@ -2271,7 +2336,8 @@ export function interpretPslDocumentToSqlContract(
     family: input.target.familyId,
     target: input.target.targetId,
     ...ifDefined('enumInferenceCodecs', input.enumInferenceCodecs),
-    ...ifDefined('codecLookup', input.codecLookup),
+    codecLookup: input.codecLookup,
+    dataTypeLookup: input.dataTypes.lookup,
     sourceId: source.sources.sourceFileFor(source.node).filename,
     diagnostics: {
       push: (d) => {
@@ -2409,6 +2475,7 @@ export function interpretPslDocumentToSqlContract(
     source,
     binder,
     enumTypeDescriptors: allEnumTypeDescriptors,
+    codecLookup: input.codecLookup,
     diagnostics,
   });
 
@@ -2416,6 +2483,7 @@ export function interpretPslDocumentToSqlContract(
 
   const modelNodes = new Map<ModelSymbol, ModelNode>();
   const fkRelationMetadata: FkRelationMetadata<ModelSymbol>[] = [];
+  const relationIndexLocations: RelationIndexLocation[] = [];
   const invalidFkPairings: InvalidModelFkPairing<ModelSymbol>[] = [];
   const backrelationCandidates: ModelBackrelationCandidate<ModelSymbol>[] = [];
   const crossSpaceRelationsByModel = new Map<ModelSymbol, RelationNode[]>();
@@ -2473,7 +2541,7 @@ export function interpretPslDocumentToSqlContract(
       enumHandles,
       capabilities: input.capabilities,
       ...(namespaceExtensionEntities.size > 0 ? { namespaceExtensionEntities } : {}),
-      ...ifDefined('codecLookup', input.codecLookup),
+      codecLookup: input.codecLookup,
       modelAttributesByName,
       contributedModelAttributeSpecs: contributedModelSpecs,
       defaultNamespaceId,
@@ -2484,6 +2552,7 @@ export function interpretPslDocumentToSqlContract(
       namespaceId !== undefined ? { ...result.modelNode, namespaceId } : result.modelNode,
     );
     fkRelationMetadata.push(...result.fkRelationMetadata);
+    relationIndexLocations.push(...result.relationIndexLocations);
     invalidFkPairings.push(...result.invalidFkPairings);
     backrelationCandidates.push(...result.backrelationCandidates);
     if (result.crossSpaceRelations.length > 0) {
@@ -2682,33 +2751,49 @@ export function interpretPslDocumentToSqlContract(
     return createNamespace(extended);
   };
 
-  const contract = buildSqlContractFromDefinition(
-    {
-      target: input.target,
-      warnings: authoringWarnings.length > 0 ? authoringWarnings : undefined,
-      ...ifDefined(
-        'extensions',
-        buildComposedExtensionPackRefs(
-          input.target,
-          [...composedExtensions].sort(compareStrings),
-          input.composedExtensionPackRefs,
+  let contract: Contract;
+  try {
+    contract = buildSqlContractFromDefinition(
+      {
+        target: input.target,
+        warnings: authoringWarnings.length > 0 ? authoringWarnings : undefined,
+        ...ifDefined(
+          'extensions',
+          buildComposedExtensionPackRefs(
+            input.target,
+            [...composedExtensions].sort(compareStrings),
+            input.composedExtensionPackRefs,
+          ),
         ),
-      ),
-      ...(Object.keys(storageTypes).length > 0 ? { storageTypes } : {}),
-      ...(Object.keys(validEnumHandles).length > 0 ? { enums: validEnumHandles } : {}),
-      // A namespace that carries extension entities but no models (e.g.
-      // `namespace unbound { role anon {} }`) would otherwise never enter
-      // `SqlStorage.namespaces` — declare every entity-carrying coordinate;
-      // model-derived coordinates dedupe downstream.
-      ...(namespaceExtensionEntities.size > 0
-        ? { namespaces: [...namespaceExtensionEntities.keys()] }
-        : {}),
-      createNamespace: createNamespaceWithExtensions,
-      ...ifDefined('valueObjects', valueObjects.length > 0 ? valueObjects : undefined),
-      models: stiColumnModelNodes,
-    },
-    input.codecLookup,
-  );
+        ...(Object.keys(storageTypes).length > 0 ? { storageTypes } : {}),
+        ...(Object.keys(validEnumHandles).length > 0 ? { enums: validEnumHandles } : {}),
+        // A namespace that carries extension entities but no models (e.g.
+        // `namespace unbound { role anon {} }`) would otherwise never enter
+        // `SqlStorage.namespaces` — declare every entity-carrying coordinate;
+        // model-derived coordinates dedupe downstream.
+        ...(namespaceExtensionEntities.size > 0
+          ? { namespaces: [...namespaceExtensionEntities.keys()] }
+          : {}),
+        createNamespace: createNamespaceWithExtensions,
+        ...ifDefined('valueObjects', valueObjects.length > 0 ? valueObjects : undefined),
+        models: stiColumnModelNodes,
+      },
+      input.codecLookup,
+      input.dataTypes.lookup,
+    );
+  } catch (error) {
+    const refusal = relationIndexRefusal(error, relationIndexLocations);
+    if (refusal === undefined) throw error;
+    diagnostics.push({
+      code: 'PSL_INVALID_RELATION_ATTRIBUTE',
+      message: refusal.message,
+      ...refusal.at.location,
+    });
+    return notOk({
+      summary: 'PSL to SQL contract interpretation failed',
+      diagnostics: diagnostics.toExternal(),
+    });
+  }
 
   // Key by namespace so same bare model names across namespaces stay distinct;
   // same-coordinate duplicates were already collapsed first-wins.

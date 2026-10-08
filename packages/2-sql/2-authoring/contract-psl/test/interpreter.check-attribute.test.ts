@@ -8,7 +8,7 @@ import {
 } from '@internal/sql-contract-ts/contract-builder';
 import { describe, expect, it, vi } from 'vitest';
 import { createTestSqlNamespace } from '../../../1-core/contract/test/test-support';
-import { fixtureDataTypeSupport } from './fixture-data-types';
+import { fixtureInterpreterTypes, fixtureTypeLookups } from './fixture-codec-descriptors';
 import {
   createBuiltinLikeControlMutationDefaults,
   interpretSqlContract,
@@ -29,7 +29,7 @@ function interpret(schema: string) {
     composedExtensionContracts: new Map(),
     controlMutationDefaults: builtinControlMutationDefaults,
     createNamespace: createTestSqlNamespace,
-    dataTypes: fixtureDataTypeSupport,
+    ...fixtureInterpreterTypes,
     capabilities: { sql: { scalarList: true, checkConstraint: true } },
   });
 }
@@ -51,8 +51,8 @@ const postgresTargetPack = {
 };
 
 const orderFields = {
-  id: field.column({ codecId: 'pg/int4@1', nativeType: 'int4' }).id(),
-  total: field.column({ codecId: 'pg/numeric@1', nativeType: 'numeric' }),
+  id: field.column({ codecId: 'pg/int4@1' }).id(),
+  total: field.column({ codecId: 'pg/numeric@1' }),
 };
 
 function orderTableOf(storage: SqlStorage) {
@@ -75,6 +75,7 @@ model Order {
     if (!pslResult.ok) return;
 
     const tsContract = defineContract({
+      ...fixtureTypeLookups,
       family: sqlFamilyPack,
       target: postgresTargetPack,
       createNamespace: createTestSqlNamespace,
@@ -116,6 +117,7 @@ model LegacyOrder {
       if (!pslResult.ok) return;
 
       const tsContract = defineContract({
+        ...fixtureTypeLookups,
         family: sqlFamilyPack,
         target: postgresTargetPack,
         createNamespace: createTestSqlNamespace,
@@ -161,6 +163,7 @@ model Order {
       if (!pslResult.ok) return;
 
       const tsContract = defineContract({
+        ...fixtureTypeLookups,
         family: sqlFamilyPack,
         target: postgresTargetPack,
         createNamespace: createTestSqlNamespace,
@@ -331,7 +334,7 @@ model Order {
         scalarColumnDescriptors: sqliteScalarColumnDescriptors,
         composedExtensionContracts: new Map(),
         createNamespace: createTestSqlNamespace,
-        dataTypes: fixtureDataTypeSupport,
+        ...fixtureInterpreterTypes,
         capabilities: { sql: {} },
         controlMutationDefaults: builtinControlMutationDefaults,
       },
@@ -365,7 +368,7 @@ model Order {
         scalarColumnDescriptors: postgresScalarTypeDescriptors,
         composedExtensionContracts: new Map(),
         createNamespace: createTestSqlNamespace,
-        dataTypes: fixtureDataTypeSupport,
+        ...fixtureInterpreterTypes,
         capabilities: {},
         controlMutationDefaults: builtinControlMutationDefaults,
       },

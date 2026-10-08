@@ -17,9 +17,11 @@ export type {
 export {
   autoincrement,
   field,
+  member,
   model,
   now,
   rel,
   sql,
 } from '@internal/sql-contract-ts/contract-builder';
 export { defineContract } from '../contract/define-contract';
+export { enumType } from '../contract/enum-type';
