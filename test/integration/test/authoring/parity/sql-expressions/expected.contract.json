@@ -137,46 +137,50 @@
               "columns": {
                 "archivedAt": {
                   "codecId": "pg/timestamptz-temporal@1",
-                  "nativeType": "timestamptz",
+                  "dataType": "pg/timestamptz",
                   "nullable": true
                 },
                 "body": {
                   "codecId": "pg/text@1",
-                  "nativeType": "text",
+                  "dataType": "pg/text",
                   "nullable": false
                 },
                 "email": {
                   "codecId": "pg/text@1",
-                  "nativeType": "text",
+                  "dataType": "pg/text",
                   "nullable": false
                 },
                 "id": {
                   "codecId": "pg/int4@1",
-                  "nativeType": "int4",
+                  "dataType": "pg/int4",
                   "nullable": false
                 },
                 "slug": {
                   "codecId": "pg/text@1",
+                  "dataType": "pg/text",
                   "default": {
                     "expression": "lower(\n  'post-' || md5(random()::text)\n)",
                     "kind": "function"
                   },
-                  "nativeType": "text",
                   "nullable": false
                 },
                 "userId": {
                   "codecId": "pg/text@1",
-                  "nativeType": "text",
+                  "dataType": "pg/text",
                   "nullable": false
                 }
               },
               "foreignKeys": [],
               "indexes": [
                 {
-                  "expression": "to_tsvector('english', \"body\")",
-                  "name": "post_body_search_0ff2126f",
+                  "columns": ["body"],
+                  "name": "post_body_search_6de135ea",
+                  "options": {
+                    "language": "english",
+                    "weightGroups": [["body"]]
+                  },
                   "prefix": "post_body_search",
-                  "type": "gin",
+                  "type": "fullText",
                   "unique": false,
                   "where": "\"archivedAt\" IS NULL"
                 },
@@ -204,11 +208,13 @@
         "id": "public"
       }
     },
-    "storageHash": "a86b2c7e7180df34ac9202481d470b7a04f6a4921ee5f8651a14eb620f3f91ee"
+    "storageHash": "4215dda17e3269187b361a0cda0d3fd6329dc139d5d5b5d7cd4bd73d1597763e"
   },
   "capabilities": {
     "postgres": {
       "distinctOn": true,
+      "forKeyShare": true,
+      "forNoKeyUpdate": true,
       "jsonAgg": true,
       "lateral": true,
       "limit": true,
@@ -219,9 +225,14 @@
       "checkConstraint": true,
       "defaultInInsert": true,
       "enums": true,
+      "forShare": true,
+      "forUpdate": true,
       "insertOnConflictSkip": true,
       "insertOnConflictWithoutTarget": true,
       "lateral": true,
+      "lockNowait": true,
+      "lockOf": true,
+      "lockSkipLocked": true,
       "returning": true,
       "scalarList": true
     }
