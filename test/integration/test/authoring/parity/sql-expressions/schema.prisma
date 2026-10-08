@@ -29,7 +29,7 @@ namespace public {
         AND "body" <> ''
     `, name: "post_body_search")
     @@check(expression: sql`"email" !~ '\s'`, name: "post_email_no_space")
-    @@check(expression: sql"\"email\" <> 'x`y'", name: "post_email_not_backtick")
+    @@check(expression: sql`"email" <> 'x\`y'`, name: "post_email_not_backtick")
     @@check(expression: sql`
 		"id" > 0
 			AND "id" < 1000000

@@ -1,4 +1,5 @@
 import { dataType } from '@internal/framework-components/codec';
+import { blindCast } from '@internal/utils/casts';
 import { describe, expect, it } from 'vitest';
 import {
   assertNothingCastsFromSqlExpression,
@@ -389,6 +390,22 @@ describe('sql', () => {
       );
     },
   );
+});
+
+describe('sql with a value another copy of the package made', () => {
+  it('interpolates its canonical text, as it does a value this copy made', () => {
+    const text = '\n    a = 1\n      AND b\n  ';
+    const fromAnotherCopy = blindCast<
+      SqlExpression,
+      "a sql value from another installed copy carries the marker but is not this copy's class"
+    >({ [Symbol.for('@prisma/sql-expression')]: true, text });
+    const interpolate = (value: SqlExpression) => sql`
+      (
+        ${value}
+      ) OR c
+    `;
+    expect(interpolate(fromAnotherCopy).text).toBe(interpolate(new SqlExpression(text)).text);
+  });
 });
 
 describe('isSqlExpression', () => {

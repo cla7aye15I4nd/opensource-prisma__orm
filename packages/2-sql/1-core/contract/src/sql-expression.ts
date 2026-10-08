@@ -152,14 +152,15 @@ export function sql(
   ...values: readonly SqlExpression[]
 ): SqlExpression {
   const texts = values.map((value, index) => {
-    if (!isSqlExpression(value)) {
+    const expression = readSqlExpression(value);
+    if (expression === undefined) {
       throw contractError(
         'CONTRACT.SQL_EXPRESSION_INTERPOLATION',
         'sql`...` only interpolates other sql`...` values; write any other text inside the template.',
         { meta: { index } },
       );
     }
-    return value.text;
+    return expression.text;
   });
   const pieces = strings.raw.map((piece) => resolveTemplateTagEscapes(piece));
   let joined = pieces[0] ?? '';
